@@ -146,12 +146,19 @@ function createOverlay() {
     overlay.className = 'gwf-overlay';
     overlay.innerHTML = `
         <div class="gwf-shell" role="dialog" aria-modal="true" aria-label="${DISPLAY_NAME}">
-            <header class="gwf-header" title="拖动此处移动窗口">
+            <header class="gwf-header" title="拖动窗口，双击复位">
                 <div>
                     <div class="gwf-eyebrow">SillyTavern Creation Studio</div>
                     <h2>${DISPLAY_NAME}</h2>
                 </div>
                 <div class="gwf-header-actions">
+                    <span class="gwf-drag-indicator" aria-hidden="true">⠿ 拖动</span>
+                    <label class="gwf-header-theme">
+                        <span>配色</span>
+                        <select id="gwf-theme-header" aria-label="配色方案">
+                            ${THEME_OPTIONS.map(theme => `<option value="${theme.id}">${escapeHtml(theme.shortLabel || theme.label)}</option>`).join('')}
+                        </select>
+                    </label>
                     <span class="gwf-version">v${VERSION}</span>
                     <button id="gwf-close" class="menu_button gwf-icon-button" type="button" title="关闭" aria-label="关闭世界与角色工坊">×</button>
                 </div>
@@ -318,6 +325,7 @@ function openStudio() {
     const overlay = createOverlay();
     overlay.classList.add('is-open');
     document.body.classList.add('gwf-modal-open');
+    ensureStudioVisible();
     const shell = overlay.querySelector('.gwf-shell');
     if (shell) keepShellInViewport(overlay, shell);
 }
@@ -336,17 +344,51 @@ function applyShellOffset(shell) {
     shell.style.transform = x || y ? `translate3d(${x}px, ${y}px, 0)` : '';
 }
 
-function keepShellInViewport(root, shell) {
+function ensureStudioVisible() {
+    const header = state.overlay?.querySelector('.gwf-header');
+    const workspace = state.overlay?.querySelector('.gwf-workspace');
+    if (!header || !workspace) return false;
+    state.overlay.scrollTop = 0;
+    state.overlay.scrollLeft = 0;
+    header.hidden = false;
+    workspace.hidden = false;
+    header.style.setProperty('display', 'flex', 'important');
+    header.style.setProperty('visibility', 'visible', 'important');
+    header.style.setProperty('opacity', '1', 'important');
+    workspace.style.setProperty('display', globalThis.matchMedia?.('(max-width: 760px)')?.matches ? 'block' : 'grid', 'important');
+    workspace.style.setProperty('visibility', 'visible', 'important');
+    workspace.style.setProperty('opacity', '1', 'important');
+    return true;
+}
+
+function scheduleStudioVisibilityCheck() {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(ensureStudioVisible);
+    else setTimeout(ensureStudioVisible, 0);
+}
+
+function shellDragBounds(root, shell, handle) {
     const shellRect = shell.getBoundingClientRect();
     const rootRect = root.getBoundingClientRect();
-    if (!shellRect.width || !shellRect.height || !rootRect.width || !rootRect.height) return;
+    const handleRect = handle?.getBoundingClientRect();
+    if (!shellRect.width || !shellRect.height || !rootRect.width || !rootRect.height) return null;
+
     const padding = 10;
-    const minLeft = rootRect.left + padding;
-    const minTop = rootRect.top + padding;
-    const maxLeft = Math.max(minLeft, rootRect.right - shellRect.width - padding);
-    const maxTop = Math.max(minTop, rootRect.bottom - shellRect.height - padding);
-    const left = Math.min(Math.max(shellRect.left, minLeft), maxLeft);
-    const top = Math.min(Math.max(shellRect.top, minTop), maxTop);
+    const visibleWidth = Math.min(shellRect.width, Math.max(120, Math.min(180, shellRect.width * 0.18)));
+    const visibleHeader = Math.min(shellRect.height, Math.max(48, Math.min(80, handleRect?.height || 64)));
+    return {
+        minLeft: rootRect.left - shellRect.width + visibleWidth,
+        maxLeft: rootRect.right - visibleWidth,
+        minTop: rootRect.top + padding,
+        maxTop: Math.max(rootRect.top + padding, rootRect.bottom - visibleHeader - padding),
+    };
+}
+
+function keepShellInViewport(root, shell) {
+    const shellRect = shell.getBoundingClientRect();
+    const bounds = shellDragBounds(root, shell, shell.querySelector('.gwf-header'));
+    if (!bounds) return;
+    const left = Math.min(Math.max(shellRect.left, bounds.minLeft), bounds.maxLeft);
+    const top = Math.min(Math.max(shellRect.top, bounds.minTop), bounds.maxTop);
     const deltaX = left - shellRect.left;
     const deltaY = top - shellRect.top;
 
@@ -384,8 +426,24 @@ function bindShellDrag(root) {
         }
     };
 
+    const moveDragging = event => {
+        if (!drag.active || event.pointerId !== drag.pointerId) return;
+
+        const bounds = shellDragBounds(root, shell, handle);
+        if (!bounds) return;
+        const left = Math.min(Math.max(drag.startLeft + event.clientX - drag.startX, bounds.minLeft), bounds.maxLeft);
+        const top = Math.min(Math.max(drag.startTop + event.clientY - drag.startY, bounds.minTop), bounds.maxTop);
+
+        state.shellOffset = {
+            x: drag.startOffsetX + left - drag.startLeft,
+            y: drag.startOffsetY + top - drag.startTop,
+        };
+        applyShellOffset(shell);
+        event.preventDefault();
+    };
+
     handle.addEventListener('pointerdown', event => {
-        if (event.button !== 0 || event.target.closest?.('button, a, input, textarea, select, [contenteditable="true"]')) return;
+        if (event.button !== 0 || event.isPrimary === false || event.target.closest?.('button, a, input, textarea, select, [contenteditable="true"]')) return;
 
         const shellRect = shell.getBoundingClientRect();
         drag.active = true;
@@ -401,29 +459,16 @@ function bindShellDrag(root) {
         event.preventDefault();
     });
 
-    handle.addEventListener('pointermove', event => {
-        if (!drag.active || event.pointerId !== drag.pointerId) return;
-
-        const rootRect = root.getBoundingClientRect();
-        const shellRect = shell.getBoundingClientRect();
-        const padding = 10;
-        const minLeft = rootRect.left + padding;
-        const minTop = rootRect.top + padding;
-        const maxLeft = Math.max(minLeft, rootRect.right - shellRect.width - padding);
-        const maxTop = Math.max(minTop, rootRect.bottom - shellRect.height - padding);
-        const left = Math.min(Math.max(drag.startLeft + event.clientX - drag.startX, minLeft), maxLeft);
-        const top = Math.min(Math.max(drag.startTop + event.clientY - drag.startY, minTop), maxTop);
-
-        state.shellOffset = {
-            x: drag.startOffsetX + left - drag.startLeft,
-            y: drag.startOffsetY + top - drag.startTop,
-        };
+    handle.addEventListener('dblclick', event => {
+        if (event.target.closest?.('button, a, input, textarea, select, [contenteditable="true"]')) return;
+        state.shellOffset = { x: 0, y: 0 };
         applyShellOffset(shell);
-        event.preventDefault();
+        keepShellInViewport(root, shell);
     });
 
-    handle.addEventListener('pointerup', stopDragging);
-    handle.addEventListener('pointercancel', stopDragging);
+    window.addEventListener('pointermove', moveDragging, { capture: true, passive: false });
+    window.addEventListener('pointerup', stopDragging, { capture: true });
+    window.addEventListener('pointercancel', stopDragging, { capture: true });
     handle.addEventListener('lostpointercapture', stopDragging);
     window.addEventListener('resize', () => keepShellInViewport(root, shell), { passive: true });
     applyShellOffset(shell);
@@ -478,6 +523,10 @@ function applyTheme(theme) {
     const normalized = normalizeOptions({ theme }).theme;
     if (state.overlay) state.overlay.dataset.theme = normalized;
     document.body.dataset.gwfTheme = normalized;
+    for (const selector of ['#gwf-theme', '#gwf-theme-header']) {
+        const control = state.overlay?.querySelector(selector);
+        if (control && control.value !== normalized) control.value = normalized;
+    }
 }
 
 function setStatus(message, tone = '') {
@@ -516,7 +565,7 @@ function collectOptions() {
         classPresets: selectedValues('[data-preset-group="classPresets"]'),
         modules: Object.fromEntries([...state.overlay.querySelectorAll('[data-module]')].map(input => [input.dataset.module, input.checked])),
         lengthPreset: state.overlay.querySelector('#gwf-length-preset')?.value,
-        theme: state.overlay.querySelector('#gwf-theme')?.value,
+        theme: state.overlay.querySelector('#gwf-theme-header')?.value || state.overlay.querySelector('#gwf-theme')?.value,
         greetingCount: numberValue('#gwf-greeting-count', 4),
         greetingStyles: selectedValues('[data-preset-group="greetingStyles"]'),
         greetingUserPresets: selectedValues('[data-preset-group="greetingUserPresets"]'),
@@ -556,6 +605,7 @@ function fillForm(rawOptions) {
     setValue('#gwf-reference-text', options.referenceText);
     setValue('#gwf-length-preset', options.lengthPreset);
     setValue('#gwf-theme', options.theme);
+    setValue('#gwf-theme-header', options.theme);
     setValue('#gwf-greeting-count', options.greetingCount);
     setValue('#gwf-greeting-user-settings', options.greetingUserSettings);
     setValue('#gwf-npc-count', options.npcCount);
@@ -605,7 +655,7 @@ function collectOptionsWithoutSaving() {
     return normalizeOptions({
         ...base,
         lengthPreset: state.overlay.querySelector('#gwf-length-preset')?.value || base.lengthPreset,
-        theme: state.overlay.querySelector('#gwf-theme')?.value || base.theme,
+        theme: state.overlay.querySelector('#gwf-theme-header')?.value || state.overlay.querySelector('#gwf-theme')?.value || base.theme,
         greetingCount: numberValue('#gwf-greeting-count', base.greetingCount),
         greetingStyles: selectedValues('[data-preset-group="greetingStyles"]'),
         greetingUserPresets: selectedValues('[data-preset-group="greetingUserPresets"]'),
@@ -1313,18 +1363,21 @@ function bindUi() {
     root.querySelector('#gwf-close').addEventListener('click', closeStudio);
     root.addEventListener('click', event => {
         if (event.target === root) closeStudio();
+        else scheduleStudioVisibilityCheck();
     });
+    root.addEventListener('change', scheduleStudioVisibilityCheck, true);
+    window.addEventListener('resize', scheduleStudioVisibilityCheck, { passive: true });
     root.querySelector('#gwf-generate').addEventListener('click', generateProject);
     root.querySelector('#gwf-stop').addEventListener('click', stopGeneration);
     root.querySelector('#gwf-generate-greetings').addEventListener('click', generateGreetings);
     root.querySelector('#gwf-stop-greetings').addEventListener('click', stopGreetingGeneration);
     root.querySelector('#gwf-length-preset').addEventListener('change', updateLengthUi);
-    root.querySelector('#gwf-theme').addEventListener('change', event => {
+    root.querySelectorAll('#gwf-theme, #gwf-theme-header').forEach(control => control.addEventListener('change', event => {
         const theme = normalizeOptions({ theme: event.target.value }).theme;
         applyTheme(theme);
         settings().options.theme = theme;
         persistSettings();
-    });
+    }));
     root.querySelectorAll('[data-section-length]').forEach(select => select.addEventListener('change', updateSectionLengthUi));
     root.querySelectorAll('[data-module], #gwf-npc-count, #gwf-relation-count, #gwf-custom-character, #gwf-custom-entry-count, #gwf-custom-entry-min, #gwf-custom-entry-max')
         .forEach(control => control.addEventListener('change', updateLengthUi));
