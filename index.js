@@ -504,13 +504,126 @@ function createEntryPoints() {
         fab.id = 'gwf-fab';
         fab.className = 'gwf-fab';
         fab.type = 'button';
-        fab.title = DISPLAY_NAME;
+        fab.title = '点击打开工坊，拖动调整位置';
         fab.setAttribute('aria-label', `打开${DISPLAY_NAME}`);
-        fab.addEventListener('click', openStudio);
+        bindFabDrag(fab);
         document.body.appendChild(fab);
+        applyFabPosition(fab);
     }
     applyTheme(settings().options.theme);
     updateFab();
+}
+
+function clampFabCoordinate(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+}
+
+function applyFabPosition(fab, { save = false } = {}) {
+    const stored = settings().fabPosition;
+    const leftValue = Number(stored?.left);
+    const topValue = Number(stored?.top);
+    if (!Number.isFinite(leftValue) || !Number.isFinite(topValue)) {
+        fab.style.removeProperty('left');
+        fab.style.removeProperty('top');
+        fab.style.removeProperty('right');
+        fab.style.removeProperty('bottom');
+        return;
+    }
+
+    const margin = 8;
+    const width = fab.offsetWidth || 52;
+    const height = fab.offsetHeight || 52;
+    const left = clampFabCoordinate(leftValue, margin, window.innerWidth - width - margin);
+    const top = clampFabCoordinate(topValue, margin, window.innerHeight - height - margin);
+    fab.style.left = `${left}px`;
+    fab.style.top = `${top}px`;
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+
+    if (save && (left !== leftValue || top !== topValue)) {
+        settings().fabPosition = { left: Math.round(left), top: Math.round(top) };
+        persistSettings();
+    }
+}
+
+function bindFabDrag(fab) {
+    const drag = {
+        active: false,
+        moved: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        startLeft: 0,
+        startTop: 0,
+    };
+    let suppressClick = false;
+    let suppressTimer = 0;
+
+    const stopDragging = event => {
+        if (!drag.active || event.pointerId !== drag.pointerId) return;
+        drag.active = false;
+        fab.classList.remove('is-dragging');
+        try {
+            if (fab.hasPointerCapture?.(event.pointerId)) fab.releasePointerCapture(event.pointerId);
+        } catch { /* pointer capture is optional */ }
+
+        if (drag.moved) {
+            settings().fabPosition = {
+                left: Math.round(Number.parseFloat(fab.style.left) || fab.getBoundingClientRect().left),
+                top: Math.round(Number.parseFloat(fab.style.top) || fab.getBoundingClientRect().top),
+            };
+            persistSettings();
+            suppressClick = true;
+            clearTimeout(suppressTimer);
+            suppressTimer = window.setTimeout(() => { suppressClick = false; }, 400);
+        }
+    };
+
+    fab.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || event.isPrimary === false) return;
+        fab.classList.add('is-dragging');
+        const rect = fab.getBoundingClientRect();
+        drag.active = true;
+        drag.moved = false;
+        drag.pointerId = event.pointerId;
+        drag.startX = event.clientX;
+        drag.startY = event.clientY;
+        drag.startLeft = rect.left;
+        drag.startTop = rect.top;
+        try { fab.setPointerCapture?.(event.pointerId); } catch { /* pointer capture is optional */ }
+    });
+
+    window.addEventListener('pointermove', event => {
+        if (!drag.active || event.pointerId !== drag.pointerId) return;
+        const deltaX = event.clientX - drag.startX;
+        const deltaY = event.clientY - drag.startY;
+        if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) return;
+        drag.moved = true;
+
+        const margin = 8;
+        const left = clampFabCoordinate(drag.startLeft + deltaX, margin, window.innerWidth - fab.offsetWidth - margin);
+        const top = clampFabCoordinate(drag.startTop + deltaY, margin, window.innerHeight - fab.offsetHeight - margin);
+        fab.style.left = `${left}px`;
+        fab.style.top = `${top}px`;
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+        event.preventDefault();
+    }, { capture: true, passive: false });
+
+    window.addEventListener('pointerup', stopDragging, { capture: true });
+    window.addEventListener('pointercancel', stopDragging, { capture: true });
+    window.addEventListener('resize', () => applyFabPosition(fab, { save: true }), { passive: true });
+    fab.addEventListener('dragstart', event => event.preventDefault());
+    fab.addEventListener('click', event => {
+        if (suppressClick) {
+            suppressClick = false;
+            clearTimeout(suppressTimer);
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
+        openStudio();
+    });
 }
 
 function updateFab() {

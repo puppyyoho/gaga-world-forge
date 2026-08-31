@@ -301,13 +301,23 @@ body.gwf-modal-open {
     border-radius: 50%;
     background: #f5a2cf url('./assets/gaga-dogs.png') center / cover no-repeat;
     box-shadow: 0 12px 30px rgba(170, 75, 128, 0.34);
-    cursor: pointer;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-drag: none;
     transition: transform 160ms ease, box-shadow 160ms ease;
 }
 
 .gwf-fab:hover {
     transform: translateY(-3px) scale(1.04);
     box-shadow: 0 16px 38px rgba(170, 75, 128, 0.44);
+}
+
+.gwf-fab.is-dragging {
+    cursor: grabbing;
+    transform: none;
+    box-shadow: 0 10px 25px rgba(170, 75, 128, 0.3);
+    transition: none;
 }
 
 .gwf-overlay {
