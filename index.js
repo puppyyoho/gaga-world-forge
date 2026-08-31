@@ -2,6 +2,8 @@ import {
     CLASS_PRESETS,
     DISPLAY_NAME,
     EXTENSION_NAME,
+    GREETING_STYLE_PRESETS,
+    GREETING_USER_PRESETS,
     LENGTH_PRESETS,
     LORE_CATEGORIES,
     MODULE_GROUPS,
@@ -10,10 +12,13 @@ import {
     SECTION_LENGTH_GROUPS,
     SECTION_LENGTH_OPTIONS,
     SETTINGS_KEY,
+    THEME_OPTIONS,
     TONE_PRESETS,
     VERSION,
     WORLD_PRESETS,
     buildGenerationPrompt,
+    buildGreetingPrompt,
+    buildGreetingSystemPrompt,
     buildRepairPrompt,
     buildSystemPrompt,
     createDefaultOptions,
@@ -49,6 +54,11 @@ const state = {
     complete: false,
     abortController: null,
     parser: null,
+    greetingGenerating: false,
+    greetingAbortController: null,
+    greetingParser: null,
+    greetingEvents: [],
+    greetingRaw: '',
     savedWorldName: '',
     validation: { valid: false, errors: [], warnings: [] },
     styleIssues: [],
@@ -143,7 +153,7 @@ function createOverlay() {
                 </div>
                 <div class="gwf-header-actions">
                     <span class="gwf-version">v${VERSION}</span>
-                    <button id="gwf-close" class="menu_button gwf-icon-button" type="button" title="关闭">×</button>
+                    <button id="gwf-close" class="menu_button gwf-icon-button" type="button" title="关闭" aria-label="关闭世界与角色工坊">×</button>
                 </div>
             </header>
             <div class="gwf-workspace">
@@ -191,6 +201,36 @@ function createOverlay() {
                             <summary>分模块长度</summary>
                             <div class="gwf-section-lengths">${sectionLengthRows()}</div>
                         </details>
+                    </details>
+
+                    <details class="gwf-section" open>
+                        <summary>开场白工坊</summary>
+                        <label class="gwf-row-field"><span>生成数量</span><input id="gwf-greeting-count" type="number" min="1" max="12" value="4"></label>
+                        <div class="gwf-field-block">
+                            <div class="gwf-subtitle">开场风格，可多选</div>
+                            <div id="gwf-greeting-style-choices" class="gwf-chip-grid"></div>
+                        </div>
+                        <div class="gwf-field-block">
+                            <div class="gwf-subtitle">U 设定预设，可多选</div>
+                            <div id="gwf-greeting-user-choices" class="gwf-chip-grid"></div>
+                        </div>
+                        <label class="gwf-greeting-settings"><span>自定义 U 设定，每行一种</span><textarea id="gwf-greeting-user-settings" rows="4" placeholder="例如：刚转来的奖学金生
+带着旧照片来找角色的人
+暂时隐瞒真实身份的访客"></textarea></label>
+                        <div class="gwf-hint">生成结果会追加到主角色的备用开场白。每条开场会根据风格和 U 设定变化，主角色的核心逻辑保持稳定。</div>
+                        <div class="gwf-greeting-actions">
+                            <button id="gwf-generate-greetings" class="menu_button" type="button" disabled>一键生成多条开场白</button>
+                            <button id="gwf-stop-greetings" class="menu_button gwf-danger" type="button" hidden>停止生成</button>
+                        </div>
+                        <div id="gwf-greeting-status" class="gwf-greeting-status" aria-live="polite">等待生成</div>
+                    </details>
+
+                    <details class="gwf-section" open>
+                        <summary>界面外观</summary>
+                        <label class="gwf-row-field"><span>配色方案</span><select id="gwf-theme">
+                            ${THEME_OPTIONS.map(theme => `<option value="${theme.id}">${escapeHtml(theme.label)}</option>`).join('')}
+                        </select></label>
+                        <div class="gwf-hint">配色会保存在当前酒馆设置中，切换后立即应用。</div>
                     </details>
 
                     <details class="gwf-section">
@@ -257,6 +297,8 @@ function createOverlay() {
                 </main>
             </div>
         </div>`;
+    overlay.querySelector('#gwf-greeting-style-choices').innerHTML = checkedChoices(GREETING_STYLE_PRESETS, 'greetingStyles');
+    overlay.querySelector('#gwf-greeting-user-choices').innerHTML = checkedChoices(GREETING_USER_PRESETS, 'greetingUserPresets');
     document.body.appendChild(overlay);
     state.overlay = overlay;
     bindUi();
@@ -423,12 +465,19 @@ function createEntryPoints() {
         fab.addEventListener('click', openStudio);
         document.body.appendChild(fab);
     }
+    applyTheme(settings().options.theme);
     updateFab();
 }
 
 function updateFab() {
     const fab = document.querySelector('#gwf-fab');
     if (fab) fab.hidden = settings().showFloatingButton === false;
+}
+
+function applyTheme(theme) {
+    const normalized = normalizeOptions({ theme }).theme;
+    if (state.overlay) state.overlay.dataset.theme = normalized;
+    document.body.dataset.gwfTheme = normalized;
 }
 
 function setStatus(message, tone = '') {
@@ -467,6 +516,11 @@ function collectOptions() {
         classPresets: selectedValues('[data-preset-group="classPresets"]'),
         modules: Object.fromEntries([...state.overlay.querySelectorAll('[data-module]')].map(input => [input.dataset.module, input.checked])),
         lengthPreset: state.overlay.querySelector('#gwf-length-preset')?.value,
+        theme: state.overlay.querySelector('#gwf-theme')?.value,
+        greetingCount: numberValue('#gwf-greeting-count', 4),
+        greetingStyles: selectedValues('[data-preset-group="greetingStyles"]'),
+        greetingUserPresets: selectedValues('[data-preset-group="greetingUserPresets"]'),
+        greetingUserSettings: state.overlay.querySelector('#gwf-greeting-user-settings')?.value,
         customLength: {
             characterChars: numberValue('#gwf-custom-character', 1600),
             entryCount: numberValue('#gwf-custom-entry-count', 22),
@@ -501,6 +555,9 @@ function fillForm(rawOptions) {
     setValue('#gwf-project-name', options.projectName);
     setValue('#gwf-reference-text', options.referenceText);
     setValue('#gwf-length-preset', options.lengthPreset);
+    setValue('#gwf-theme', options.theme);
+    setValue('#gwf-greeting-count', options.greetingCount);
+    setValue('#gwf-greeting-user-settings', options.greetingUserSettings);
     setValue('#gwf-npc-count', options.npcCount);
     setValue('#gwf-relation-count', options.relationCount);
     setValue('#gwf-custom-character', options.customLength.characterChars);
@@ -521,6 +578,7 @@ function fillForm(rawOptions) {
     state.overlay.querySelector('#gwf-stream').checked = options.stream !== false;
     state.overlay.querySelector('#gwf-reference-character').checked = options.referenceCurrentCharacter;
     state.overlay.querySelector('#gwf-reference-lore').checked = options.referencePrimaryLorebook;
+    applyTheme(options.theme);
     updateLengthUi();
     updateSectionLengthUi();
 }
@@ -547,6 +605,11 @@ function collectOptionsWithoutSaving() {
     return normalizeOptions({
         ...base,
         lengthPreset: state.overlay.querySelector('#gwf-length-preset')?.value || base.lengthPreset,
+        theme: state.overlay.querySelector('#gwf-theme')?.value || base.theme,
+        greetingCount: numberValue('#gwf-greeting-count', base.greetingCount),
+        greetingStyles: selectedValues('[data-preset-group="greetingStyles"]'),
+        greetingUserPresets: selectedValues('[data-preset-group="greetingUserPresets"]'),
+        greetingUserSettings: state.overlay.querySelector('#gwf-greeting-user-settings')?.value || base.greetingUserSettings,
         modules: Object.fromEntries([...state.overlay.querySelectorAll('[data-module]')].map(input => [input.dataset.module, input.checked])),
         npcCount: numberValue('#gwf-npc-count', base.npcCount),
         relationCount: numberValue('#gwf-relation-count', base.relationCount),
@@ -598,15 +661,23 @@ async function buildReferences(options) {
 }
 
 function resetGeneration() {
+    state.greetingAbortController?.abort();
     state.events = [];
     state.raw = '';
     state.selectedId = '';
     state.complete = false;
+    state.greetingGenerating = false;
+    state.greetingAbortController = null;
+    state.greetingParser = null;
+    state.greetingEvents = [];
+    state.greetingRaw = '';
+    setGreetingGenerating(false);
     state.savedWorldName = '';
     state.validation = { valid: false, errors: [], warnings: [] };
     state.styleIssues = [];
     state.lengthIssues = [];
     state.overlay.querySelector('#gwf-raw').value = '';
+    setGreetingStatus('等待生成');
     refreshResults();
 }
 
@@ -659,7 +730,7 @@ function filterUnselectedEvents(events, options) {
 }
 
 async function generateProject() {
-    if (state.generating) return;
+    if (state.generating || state.greetingGenerating) return;
     const options = collectOptions();
     if (!options.brief && !options.worldPresets.length) {
         notify('warning', '写一点创作要求，或者至少选择一个世界预设。');
@@ -751,8 +822,124 @@ async function generateProject() {
     }
 }
 
+function setGreetingStatus(message, tone = '') {
+    const element = state.overlay?.querySelector('#gwf-greeting-status');
+    if (!element) return;
+    element.textContent = message;
+    element.dataset.tone = tone;
+}
+
+function setGreetingGenerating(value) {
+    state.greetingGenerating = value;
+    const generate = state.overlay?.querySelector('#gwf-generate-greetings');
+    const stop = state.overlay?.querySelector('#gwf-stop-greetings');
+    if (generate) generate.disabled = value || !state.complete;
+    if (stop) stop.hidden = !value;
+}
+
+function normalizeGreetingEvents(events) {
+    const ids = new Set();
+    return events
+        .filter(event => event?.type === 'greeting' && String(event.text || '').trim())
+        .map((event, index) => {
+            const rawId = String(event.id || '').trim();
+            const id = rawId || ('greeting.' + String(index + 1).padStart(2, '0'));
+            if (ids.has(id)) return null;
+            ids.add(id);
+            return {
+                type: 'greeting',
+                id,
+                index: Number(event.index) || index + 1,
+                style: String(event.style || '自由风格').trim(),
+                userSetting: String(event.userSetting || '自由进入').trim(),
+                text: String(event.text).trim(),
+            };
+        })
+        .filter(Boolean);
+}
+
+function appendGeneratedGreetings(greetings) {
+    const main = aggregateBlueprint(state.events).mainCharacter;
+    if (!main) throw new Error('没有可添加开场白的主角色卡');
+    const current = Array.isArray(main.alternateGreetings) ? main.alternateGreetings : [];
+    const additions = greetings.map(greeting => greeting.text);
+    main.alternateGreetings = [...new Set([...current, ...additions])].slice(0, 30);
+}
+
+async function generateGreetings() {
+    if (state.generating || state.greetingGenerating) return;
+    const blueprint = aggregateBlueprint(state.events);
+    if (!blueprint.mainCharacter) {
+        notify('warning', '请先完成一次角色卡创作，再生成开场白。');
+        return;
+    }
+    const options = collectOptions();
+    const controller = new AbortController();
+    state.greetingGenerating = true;
+    state.greetingAbortController = controller;
+    state.greetingEvents = [];
+    state.greetingRaw = '';
+    state.greetingParser = new JsonlStreamParser({
+        onEvent: event => {
+            state.greetingEvents = normalizeGreetingEvents([...state.greetingEvents, event]);
+            if (state.greetingEvents.length) {
+                setGreetingStatus('已接收 ' + state.greetingEvents.length + ' 条开场白', 'working');
+            }
+        },
+        onError: detail => console.warn('[' + DISPLAY_NAME + '] 开场白 JSONL 第 ' + detail.lineNumber + ' 行暂时无法解析', detail.message),
+    });
+    setGreetingGenerating(true);
+    setGreetingStatus('正在根据角色卡准备多种进入方式', 'working');
+    try {
+        const result = await generateWithFallback(getContext(), {
+            systemPrompt: buildGreetingSystemPrompt(),
+            prompt: buildGreetingPrompt(blueprint, options),
+            preferStream: options.stream,
+            signal: controller.signal,
+            onText: (text, meta) => {
+                state.greetingRaw = text;
+                state.greetingParser.pushCumulative(text);
+                setGreetingStatus('正在生成，已接收 ' + state.greetingEvents.length + ' 条 · ' + (meta?.length || text.length) + ' 字符', 'working');
+            },
+        });
+        const parsed = state.greetingParser.finish(result.text);
+        const greetings = normalizeGreetingEvents(parsed.events).slice(0, options.greetingCount);
+        if (!greetings.length) throw new Error('模型没有返回可用的开场白');
+        state.greetingEvents = greetings;
+        appendGeneratedGreetings(greetings);
+        persistDraft();
+        refreshResults();
+        setGreetingStatus('已追加 ' + greetings.length + ' 条开场白，可在主角色卡中逐条编辑', 'success');
+        setStatus('开场白已追加 ' + greetings.length + ' 条', 'success');
+        notify('success', '多条开场白已经生成并加入主角色卡。');
+    } catch (error) {
+        if (controller.signal.aborted || error?.name === 'AbortError') {
+            if (state.greetingEvents.length) {
+                appendGeneratedGreetings(state.greetingEvents);
+                persistDraft();
+                refreshResults();
+            }
+            setGreetingStatus('已停止，已保留已接收的开场白', 'warning');
+        } else {
+            console.error('[' + DISPLAY_NAME + '] 开场白生成失败', error);
+            setGreetingStatus('生成未完成：' + String(error?.message || error), 'error');
+            notify('error', String(error?.message || error));
+        }
+    } finally {
+        if (state.greetingAbortController === controller) state.greetingAbortController = null;
+        state.greetingParser = null;
+        setGreetingGenerating(false);
+        refreshResults();
+    }
+}
+
+function stopGreetingGeneration() {
+    state.greetingAbortController?.abort(new DOMException('用户停止开场白生成', 'AbortError'));
+}
+
 function stopGeneration() {
     state.abortController?.abort(new DOMException('用户停止生成', 'AbortError'));
+    stopGreetingGeneration();
     try { getContext().stopGeneration?.(); } catch { /* host fallback */ }
 }
 
@@ -822,6 +1009,30 @@ function field(label, path, value, { area = false, kind = 'string', rows = 3, re
     return `<label class="gwf-editor-field"><span>${escapeHtml(label)}</span>${content}</label>`;
 }
 
+function greetingManager(event) {
+    const greetings = Array.isArray(event.alternateGreetings) ? event.alternateGreetings : [];
+    const items = greetings.map((text, index) => {
+        const profile = state.greetingEvents.find(item => item.text === text);
+        const profileText = profile ? ' · ' + escapeHtml(profile.style) + ' · ' + escapeHtml(profile.userSetting) : '';
+        return (
+            '<article class="gwf-greeting-item">' +
+            '<div class="gwf-greeting-item-heading">' +
+            '<span>备用开场白 ' + (index + 1) + profileText + '</span>' +
+            '<button type="button" class="gwf-greeting-remove" data-remove-greeting="' + index + '" aria-label="删除备用开场白 ' + (index + 1) + '">×</button>' +
+            '</div>' +
+            '<textarea data-greeting-index="' + index + '" rows="7">' + escapeHtml(text) + '</textarea>' +
+            '</article>'
+        );
+    }).join('');
+    return (
+        '<section class="gwf-greeting-manager">' +
+        '<div class="gwf-greeting-manager-heading"><strong>备用开场白</strong><span>共 ' + greetings.length + ' 条，可逐条修改</span></div>' +
+        '<div class="gwf-greeting-list">' + (items || '<p class="gwf-greeting-empty">暂时没有备用开场白，可以新增一条或使用左侧批量生成。</p>') + '</div>' +
+        '<button type="button" class="menu_button gwf-greeting-add" data-add-greeting>新增一条开场白</button>' +
+        '</section>'
+    );
+}
+
 function selectField(label, path, value, options) {
     return `<label class="gwf-editor-field"><span>${escapeHtml(label)}</span><select data-field="${path}">${options.map(option => `<option value="${option}" ${option === value ? 'selected' : ''}>${option}</option>`).join('')}</select></label>`;
 }
@@ -847,11 +1058,11 @@ function renderEditor() {
             + field('性格与行为逻辑', 'personality', event.personality, { area: true, rows: 8 })
             + field('场景', 'scenario', event.scenario, { area: true, rows: 7 })
             + field('开场白', 'firstMessage', event.firstMessage, { area: true, rows: 9 })
+            + greetingManager(event)
             + field('示例对话', 'exampleDialogue', event.exampleDialogue, { area: true, rows: 8 })
             + field('系统提示', 'systemPrompt', event.systemPrompt, { area: true, rows: 5 })
             + field('历史后指令', 'postHistoryInstructions', event.postHistoryInstructions, { area: true, rows: 5 })
             + field('作者备注', 'creatorNotes', event.creatorNotes, { area: true, rows: 5 })
-            + field('备用开场白，每行一条', 'alternateGreetings', (event.alternateGreetings || []).join('\n'), { area: true, rows: 5, kind: 'lines' })
             + field('标签，用逗号分隔', 'tags', (event.tags || []).join(', '), { kind: 'array' });
     } else if (event.type === 'done') {
         html += `<pre class="gwf-json-preview">${escapeHtml(JSON.stringify(event, null, 2))}</pre>`;
@@ -879,6 +1090,25 @@ function renderEditor() {
         persistDraft();
         refreshResults({ preserveEditor: true });
     }));
+    editor.querySelectorAll('[data-greeting-index]').forEach(control => control.addEventListener('input', () => {
+        const index = Number(control.dataset.greetingIndex);
+        event.alternateGreetings ??= [];
+        event.alternateGreetings[index] = control.value;
+        persistDraft();
+        refreshResults({ preserveEditor: true });
+    }));
+    editor.querySelectorAll('[data-remove-greeting]').forEach(button => button.addEventListener('click', () => {
+        const index = Number(button.dataset.removeGreeting);
+        event.alternateGreetings?.splice(index, 1);
+        persistDraft();
+        refreshResults();
+    }));
+    editor.querySelector('[data-add-greeting]')?.addEventListener('click', () => {
+        event.alternateGreetings ??= [];
+        event.alternateGreetings.push('');
+        persistDraft();
+        refreshResults();
+    });
 }
 
 function updateEventField(event, path, rawValue, kind) {
@@ -940,6 +1170,8 @@ function updateActionState(ready) {
         const button = state.overlay.querySelector(id);
         if (button) button.disabled = !ready;
     }
+    const generateGreetingsButton = state.overlay.querySelector('#gwf-generate-greetings');
+    if (generateGreetingsButton) generateGreetingsButton.disabled = !ready || state.greetingGenerating;
     const persona = aggregateBlueprint(state.events).userPersona;
     const copy = state.overlay.querySelector('#gwf-copy-persona');
     if (copy) {
@@ -1084,7 +1316,15 @@ function bindUi() {
     });
     root.querySelector('#gwf-generate').addEventListener('click', generateProject);
     root.querySelector('#gwf-stop').addEventListener('click', stopGeneration);
+    root.querySelector('#gwf-generate-greetings').addEventListener('click', generateGreetings);
+    root.querySelector('#gwf-stop-greetings').addEventListener('click', stopGreetingGeneration);
     root.querySelector('#gwf-length-preset').addEventListener('change', updateLengthUi);
+    root.querySelector('#gwf-theme').addEventListener('change', event => {
+        const theme = normalizeOptions({ theme: event.target.value }).theme;
+        applyTheme(theme);
+        settings().options.theme = theme;
+        persistSettings();
+    });
     root.querySelectorAll('[data-section-length]').forEach(select => select.addEventListener('change', updateSectionLengthUi));
     root.querySelectorAll('[data-module], #gwf-npc-count, #gwf-relation-count, #gwf-custom-character, #gwf-custom-entry-count, #gwf-custom-entry-min, #gwf-custom-entry-max')
         .forEach(control => control.addEventListener('change', updateLengthUi));

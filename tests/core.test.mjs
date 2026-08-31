@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLengthPlan } from '../studio-data.js';
+import { buildGreetingPrompt, normalizeOptions, resolveLengthPlan } from '../studio-data.js';
 import {
     JsonlStreamParser,
     aggregateBlueprint,
@@ -138,6 +138,37 @@ test('complete blueprint validates and aggregates', () => {
     assert.equal(blueprint.loreEvents.length, 4);
 });
 
+test('theme options normalize to a supported palette', () => {
+    assert.equal(normalizeOptions({ theme: 'forest' }).theme, 'forest');
+    assert.equal(normalizeOptions({ theme: 'unknown-theme' }).theme, 'twilight');
+});
+
+test('greeting prompt includes the requested count, styles, and user settings', () => {
+    const options = normalizeOptions({
+        brief: '雨夜校园中的秘密会面',
+        greetingCount: 3,
+        greetingStyles: ['quiet'],
+        greetingUserPresets: ['rival'],
+        greetingUserSettings: '带着旧照片来访的人',
+    });
+    const prompt = buildGreetingPrompt({
+        project: { name: '槐青中学', summary: '旧教学楼即将拆除' },
+        mainCharacter: {
+            name: '林知遥',
+            description: '靠奖学金住校的学生',
+            personality: '遇到质疑时先核对标准',
+            scenario: '正在整理听证材料',
+            firstMessage: '她把文件推到桌边。',
+            exampleDialogue: '你来得很晚。',
+        },
+        loreEvents: [],
+    }, options);
+    assert.match(prompt, /3 条/);
+    assert.match(prompt, /克制留白/);
+    assert.match(prompt, /竞争对手/);
+    assert.match(prompt, /带着旧照片来访的人/);
+});
+
 test('style scanner catches contrast sentences and dash characters', () => {
     const events = sampleEvents();
     events[0].summary = '这不是普通考核，而是一场资源竞赛。';
@@ -169,12 +200,29 @@ test('worldbook compiler creates deterministic native entries', () => {
     assert.equal(hook.keysecondary.includes('奖学金'), true);
 });
 
+test('worldbook compiler preserves SillyTavern order and selective fields', () => {
+    const events = sampleEvents();
+    events[1].importance = 'critical';
+    events[1].secondaryKeys = ['听证会'];
+    const book = compileWorldBook(events, '槐青中学 世界书');
+    const entries = Object.values(book.entries);
+    const scholarship = entries.find(entry => entry.comment.includes('奖学金考核'));
+    const relation = entries.find(entry => entry.comment.includes('林知遥与陈砚舟'));
+    assert.equal(scholarship.selective, true);
+    assert.equal(scholarship.position, 0);
+    assert.equal(scholarship.groupWeight, 100);
+    assert.equal(scholarship.order > relation.order, true);
+});
+
 test('character card compiler embeds the same lorebook', () => {
-    const card = compileCharacterCard(sampleEvents(), null, { worldBookName: '槐青中学 世界书', embedBook: true });
+    const events = sampleEvents();
+    events[2].alternateGreetings = ['雨夜里，她把伞向你这边倾了倾。'];
+    const card = compileCharacterCard(events, null, { worldBookName: '槐青中学 世界书', embedBook: true });
     assert.equal(card.spec, 'chara_card_v2');
     assert.equal(card.data.name, '林知遥');
     assert.equal(card.data.extensions.world, '槐青中学 世界书');
     assert.equal(card.data.character_book.entries.length, 4);
+    assert.deepEqual(card.data.alternate_greetings, events[2].alternateGreetings);
 });
 
 test('trigger simulator distinguishes direct and recursive activation', () => {

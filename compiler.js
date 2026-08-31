@@ -43,10 +43,10 @@ function activationSettings(event, randomGroup, dependencyKeys) {
     const activation = event.activation || {};
     const mode = activation.mode || 'keyword';
     const probability = Math.round(clampNumber(activation.probability, 0, 100, 100));
-    const hasKeys = Array.isArray(event.keys) && event.keys.length > 0;
+    const hasSecondaryKeys = Array.isArray(event.secondaryKeys) && event.secondaryKeys.length > 0;
     return {
         constant: mode === 'constant' || mode === 'probability',
-        selective: mode === 'selective' || (dependencyKeys.length > 0 && ['keyword', 'state'].includes(mode)),
+        selective: mode === 'selective' || hasSecondaryKeys || dependencyKeys.length > 0,
         selectiveLogic: LOGIC_MAP[activation.selectiveLogic] ?? 0,
         useProbability: mode === 'probability' || probability < 100,
         probability,

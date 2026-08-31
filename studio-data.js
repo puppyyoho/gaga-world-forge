@@ -1,7 +1,44 @@
 export const EXTENSION_NAME = 'gaga-world-forge';
 export const DISPLAY_NAME = '嘎嘎世界与角色工坊';
 export const SETTINGS_KEY = 'gagaWorldForge';
-export const VERSION = '0.1.1';
+export const VERSION = '0.1.3';
+
+export const THEME_OPTIONS = [
+    { id: 'twilight', label: '暮色紫粉' },
+    { id: 'moonlight', label: '月光蓝' },
+    { id: 'forest', label: '森林青绿' },
+    { id: 'amber', label: '琥珀暖金' },
+    { id: 'rose', label: '玫瑰酒红' },
+];
+
+const THEME_IDS = new Set(THEME_OPTIONS.map(theme => theme.id));
+
+export const GREETING_STYLE_PRESETS = [
+    { id: 'immersive', label: '沉浸叙事' },
+    { id: 'daily', label: '日常生活' },
+    { id: 'campus', label: '校园青春' },
+    { id: 'humor', label: '轻松幽默' },
+    { id: 'tension', label: '冲突拉扯' },
+    { id: 'mystery', label: '悬疑秘密' },
+    { id: 'romantic', label: '暧昧心动' },
+    { id: 'bittersweet', label: '酸涩重逢' },
+    { id: 'action', label: '任务危机' },
+    { id: 'quiet', label: '克制留白' },
+];
+
+export const GREETING_USER_PRESETS = [
+    { id: 'newcomer', label: '新转入的人' },
+    { id: 'oldFriend', label: '旧识重逢的人' },
+    { id: 'temporaryPartner', label: '临时搭档' },
+    { id: 'rival', label: '竞争对手' },
+    { id: 'neighbor', label: '邻居或室友' },
+    { id: 'secretVisitor', label: '带着秘密来访的人' },
+    { id: 'helpSeeker', label: '前来求助的人' },
+    { id: 'specialGuest', label: '身份特殊的客人' },
+];
+
+const GREETING_STYLE_IDS = new Set(GREETING_STYLE_PRESETS.map(item => item.id));
+const GREETING_USER_IDS = new Set(GREETING_USER_PRESETS.map(item => item.id));
 
 export const WORLD_PRESETS = [
     { id: 'campus', label: '校园' },
@@ -198,6 +235,11 @@ export function createDefaultOptions() {
         stream: true,
         referenceCurrentCharacter: false,
         referencePrimaryLorebook: false,
+        theme: 'twilight',
+        greetingCount: 4,
+        greetingStyles: ['immersive', 'daily', 'campus'],
+        greetingUserPresets: [],
+        greetingUserSettings: '',
     };
 }
 
@@ -216,6 +258,19 @@ export function normalizeOptions(input = {}) {
         brief: String(input.brief || '').trim(),
         referenceText: String(input.referenceText || '').trim(),
         projectName: String(input.projectName || '').trim().slice(0, 100),
+        theme: THEME_IDS.has(input.theme) ? input.theme : defaults.theme,
+        greetingCount: clampInteger(input.greetingCount, 1, 12, defaults.greetingCount),
+        greetingStyles: [...new Set((Array.isArray(input.greetingStyles) ? input.greetingStyles : defaults.greetingStyles).filter(id => GREETING_STYLE_IDS.has(id)))]
+            .slice(0, GREETING_STYLE_PRESETS.length),
+        greetingUserPresets: [...new Set((Array.isArray(input.greetingUserPresets) ? input.greetingUserPresets : defaults.greetingUserPresets).filter(id => GREETING_USER_IDS.has(id)))]
+            .slice(0, GREETING_USER_PRESETS.length),
+        greetingUserSettings: String(input.greetingUserSettings || '')
+            .split(/\r?\n/u)
+            .map(item => item.trim())
+            .filter(Boolean)
+            .slice(0, 12)
+            .join('\n')
+            .slice(0, 4000),
         modules: { ...defaults.modules, ...(input.modules || {}), mainCharacter: true },
         lengthPreset,
         customLength: {
@@ -245,6 +300,13 @@ function labelsFor(ids, definitions) {
 function selectedModuleLabels(options) {
     const labels = new Map(MODULE_GROUPS.flatMap(group => group.modules.map(module => [module.id, module.label])));
     return Object.entries(options.modules).filter(([, selected]) => selected).map(([id]) => labels.get(id) || id);
+}
+
+function greetingUserSettingLabels(options) {
+    return [
+        ...labelsFor(options.greetingUserPresets, GREETING_USER_PRESETS),
+        ...options.greetingUserSettings.split('\n').filter(Boolean),
+    ].filter((value, index, values) => values.indexOf(value) === index);
 }
 
 export function resolveLengthPlan(rawOptions) {
@@ -510,6 +572,9 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
         '【长度约束】',
         lengthInstruction(plan),
         sectionLengthInstruction(options),
+        '【开场白风格】' + (labelsFor(options.greetingStyles, GREETING_STYLE_PRESETS).join('、') || '根据角色处境自由变化'),
+        '【U 设定组合】' + (greetingUserSettingLabels(options).join('、') || '根据用户创作要求设计多种自然进入方式'),
+        '【开场白计划】主角色的 firstMessage 作为默认开场白。请额外生成 ' + options.greetingCount + ' 条 alternateGreetings，优先覆盖已选风格与 U 设定，确保每条开场的场景、冲突入口和互动距离有明显差异。',
     ];
 
     if (options.referenceText) lines.push('', '【用户粘贴的参考资料】', options.referenceText);
@@ -517,6 +582,72 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
     if (references.loreText) lines.push('', '【当前主世界书参考】', references.loreText);
     lines.push('', '现在开始输出 JSONL。第一行必须是 project，最后一行必须是 done。');
     return lines.join('\n');
+}
+
+export function buildGreetingSystemPrompt() {
+    return [
+        '你是中文互动叙事的开场白编辑器。',
+        '你的任务是根据角色卡、世界书、用户创作要求、选定风格和 U 设定，创作多条可以直接放入 SillyTavern 角色卡的 alternate greetings。',
+        '',
+        '【创作规则】',
+        '1. 每条开场白都要让角色主动做出具体动作、说出符合语言指纹的话，并留下自然的回应空间。',
+        '2. 每条开场白都要有清晰场景、当下处境和互动入口。开场之间需要在节奏、冲突强度、情绪距离和信息揭示量上形成差异。',
+        '3. 角色的行为、称呼、身体微习惯和资源差异需要符合角色卡与世界书事实。',
+        '4. 每条开场白都对应一个 style 和 userSetting。U 设定只改变用户进入场景的身份、处境或与角色的既有关系，不替用户写死选择和台词。',
+        '5. 只使用用户选中的内容模块。亲密与 NSFW 内容遵循当前选项，未选内容保持在普通互动范围。',
+        '6. 使用自然流畅的中文。禁止先否定后肯定的对照句式，禁止使用任何破折号字符。',
+        '',
+        '【输出协议】',
+        '1. 只输出 JSONL，每行一个可以被 JSON.parse 解析的对象。',
+        '2. 每行结构为 {"type":"greeting","id":"greeting.01","index":1,"style":"风格名称","userSetting":"U设定名称","text":"完整开场白"}。',
+        '3. 严格输出用户要求的数量。index 从 1 开始递增，id 依次使用 greeting.01、greeting.02 这样的稳定格式。',
+        '4. text 只放开场白正文，不要放标题、编号、解释、Markdown 代码块或额外字段。',
+        '5. JSON 字符串内部的换行必须转义。每个对象保持单行。',
+    ].join('\n');
+}
+
+export function buildGreetingPrompt(rawBlueprint = {}, rawOptions = {}) {
+    const options = normalizeOptions(rawOptions);
+    const main = rawBlueprint.mainCharacter || {};
+    const project = rawBlueprint.project || {};
+    const lore = (rawBlueprint.loreEvents || [])
+        .slice(0, 18)
+        .map(event => '【' + (event.title || event.category || event.id) + '】' + (event.content || ''))
+        .join('\n')
+        .slice(0, 18000);
+    const styles = labelsFor(options.greetingStyles, GREETING_STYLE_PRESETS);
+    const userSettings = greetingUserSettingLabels(options);
+    const styleText = styles.length ? styles.join('、') : '根据角色处境自由变化';
+    const userText = userSettings.length ? userSettings.join('、') : '根据用户创作要求设计多种自然进入方式';
+    return [
+        '请为以下角色卡生成 ' + options.greetingCount + ' 条可直接使用的 alternate greetings。',
+        '',
+        '【用户创作要求】',
+        options.brief || '延续角色卡和世界书的长期互动方向。',
+        '',
+        '【项目背景】',
+        '项目名：' + (project.name || '未命名项目'),
+        '统一方向：' + (project.summary || ''),
+        '',
+        '【主角色卡】',
+        '姓名：' + (main.name || '未命名角色'),
+        '角色描述：' + (main.description || ''),
+        '性格与行为逻辑：' + (main.personality || ''),
+        '当前场景：' + (main.scenario || ''),
+        '默认开场白：' + (main.firstMessage || ''),
+        '示例对话：' + (main.exampleDialogue || ''),
+        '',
+        '【世界书相关事实】',
+        lore || '根据角色卡与用户要求补足场景事实。',
+        '',
+        '【开场风格】',
+        styleText,
+        '',
+        '【U 设定组合】',
+        userText,
+        '',
+        '每条开场白都要标明对应的 style 和 userSetting。请从给定组合中交叉取材，保持角色核心逻辑稳定，让 U 的身份或处境改变进入场景的方式。现在开始输出 JSONL。',
+    ].join('\n');
 }
 
 export function buildRepairPrompt(issues, events) {
