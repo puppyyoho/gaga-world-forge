@@ -1,0 +1,1017 @@
+import {
+    CLASS_PRESETS,
+    DISPLAY_NAME,
+    EXTENSION_NAME,
+    LENGTH_PRESETS,
+    LORE_CATEGORIES,
+    MODULE_GROUPS,
+    PERSONALITY_PRESETS,
+    RELATION_PRESETS,
+    SECTION_LENGTH_GROUPS,
+    SECTION_LENGTH_OPTIONS,
+    SETTINGS_KEY,
+    TONE_PRESETS,
+    VERSION,
+    WORLD_PRESETS,
+    buildGenerationPrompt,
+    buildRepairPrompt,
+    buildSystemPrompt,
+    createDefaultOptions,
+    normalizeOptions,
+    resolveLengthPlan,
+} from './studio-data.js';
+import {
+    JsonlStreamParser,
+    aggregateBlueprint,
+    applyPatches,
+    findLengthIssues,
+    findStyleIssues,
+    parsePatchJsonl,
+    validateBlueprint,
+} from './jsonl.js';
+import {
+    compileCharacterCard,
+    compilePersonaText,
+    compileWorldBook,
+    serializeBlueprint,
+    serializeJsonl,
+    simulateLoreActivation,
+} from './compiler.js';
+import { generateWithFallback } from './streaming.js';
+
+const state = {
+    overlay: null,
+    events: [],
+    raw: '',
+    selectedId: '',
+    activeTab: 'blueprint',
+    generating: false,
+    complete: false,
+    abortController: null,
+    parser: null,
+    savedWorldName: '',
+    validation: { valid: false, errors: [], warnings: [] },
+    styleIssues: [],
+    lengthIssues: [],
+};
+
+function getContext() {
+    const st = globalThis.SillyTavern;
+    if (!st?.getContext) throw new Error('未检测到 SillyTavern.getContext()。');
+    return st.getContext();
+}
+
+function notify(type, message) {
+    if (globalThis.toastr?.[type]) globalThis.toastr[type](message, DISPLAY_NAME);
+    else console[type === 'error' ? 'error' : 'log'](`[${DISPLAY_NAME}] ${message}`);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
+
+function settings() {
+    const ctx = getContext();
+    const root = ctx.extensionSettings;
+    root[SETTINGS_KEY] ??= {
+        showFloatingButton: true,
+        options: createDefaultOptions(),
+        draftEvents: [],
+    };
+    root[SETTINGS_KEY].options = normalizeOptions(root[SETTINGS_KEY].options);
+    return root[SETTINGS_KEY];
+}
+
+function persistSettings() {
+    try {
+        getContext().saveSettingsDebounced?.();
+    } catch (error) {
+        console.warn(`[${DISPLAY_NAME}] 保存扩展设置失败`, error);
+    }
+}
+
+function checkedChoices(definitions, group) {
+    return definitions.map(item => `
+        <label class="gwf-chip">
+            <input type="checkbox" data-preset-group="${group}" value="${item.id}">
+            <span>${escapeHtml(item.label)}</span>
+        </label>`).join('');
+}
+
+function moduleChoices() {
+    return MODULE_GROUPS.map(group => `
+        <div class="gwf-module-group">
+            <div class="gwf-module-title">${escapeHtml(group.label)}</div>
+            <div class="gwf-check-grid">
+                ${group.modules.map(module => `
+                    <label class="gwf-check">
+                        <input type="checkbox" data-module="${module.id}" ${module.locked ? 'checked disabled' : ''}>
+                        <span>${escapeHtml(module.label)}</span>
+                    </label>`).join('')}
+            </div>
+        </div>`).join('');
+}
+
+function sectionLengthRows() {
+    return SECTION_LENGTH_GROUPS.map(group => `
+        <label class="gwf-mini-field">
+            <span>${escapeHtml(group.label)}</span>
+            <select data-section-length="${group.id}">
+                ${SECTION_LENGTH_OPTIONS.map(option => `<option value="${option.id}">${escapeHtml(option.label)}</option>`).join('')}
+            </select>
+            <input data-section-custom="${group.id}" type="number" min="100" max="20000" value="800" placeholder="目标字数" hidden>
+        </label>`).join('');
+}
+
+function createOverlay() {
+    if (state.overlay) return state.overlay;
+    const overlay = document.createElement('div');
+    overlay.id = 'gwf-overlay';
+    overlay.className = 'gwf-overlay';
+    overlay.innerHTML = `
+        <div class="gwf-shell" role="dialog" aria-modal="true" aria-label="${DISPLAY_NAME}">
+            <header class="gwf-header">
+                <div>
+                    <div class="gwf-eyebrow">SillyTavern Creation Studio</div>
+                    <h2>${DISPLAY_NAME}</h2>
+                </div>
+                <div class="gwf-header-actions">
+                    <span class="gwf-version">v${VERSION}</span>
+                    <button id="gwf-close" class="menu_button gwf-icon-button" type="button" title="关闭">×</button>
+                </div>
+            </header>
+            <div class="gwf-workspace">
+                <aside class="gwf-compose">
+                    <section class="gwf-section gwf-hero-section">
+                        <label for="gwf-brief" class="gwf-label">你想创作什么？</label>
+                        <textarea id="gwf-brief" rows="7" placeholder="例如：现代校园背景。主角色是奖学金生，和家境优越的同桌从互相防备开始熟悉。希望阶层差异真正影响日常选择，NPC都有自己的生活。"></textarea>
+                        <input id="gwf-project-name" type="text" maxlength="100" placeholder="项目名，可留空让模型命名">
+                    </section>
+
+                    <details class="gwf-section" open>
+                        <summary>创作预设</summary>
+                        <div class="gwf-field-block"><div class="gwf-subtitle">世界</div><div class="gwf-chip-grid">${checkedChoices(WORLD_PRESETS, 'worldPresets')}</div></div>
+                        <div class="gwf-field-block"><div class="gwf-subtitle">气质</div><div class="gwf-chip-grid">${checkedChoices(TONE_PRESETS, 'tonePresets')}</div></div>
+                        <div class="gwf-field-block"><div class="gwf-subtitle">主角色倾向</div><div class="gwf-chip-grid">${checkedChoices(PERSONALITY_PRESETS, 'personalityPresets')}</div></div>
+                        <div class="gwf-field-block"><div class="gwf-subtitle">关系起点</div><div class="gwf-chip-grid">${checkedChoices(RELATION_PRESETS, 'relationPresets')}</div></div>
+                        <div class="gwf-field-block"><div class="gwf-subtitle">经济与阶层</div><div class="gwf-chip-grid">${checkedChoices(CLASS_PRESETS, 'classPresets')}</div></div>
+                    </details>
+
+                    <details class="gwf-section" open>
+                        <summary>生成内容</summary>
+                        ${moduleChoices()}
+                        <div class="gwf-count-row">
+                            <label>NPC 数量<input id="gwf-npc-count" type="number" min="0" max="40" value="4"></label>
+                            <label>关系条目<input id="gwf-relation-count" type="number" min="0" max="60" value="5"></label>
+                        </div>
+                    </details>
+
+                    <details class="gwf-section" open>
+                        <summary>长度与密度</summary>
+                        <label class="gwf-row-field"><span>总长度</span><select id="gwf-length-preset">
+                            ${Object.entries(LENGTH_PRESETS).map(([id, item]) => `<option value="${id}">${escapeHtml(item.label)}</option>`).join('')}
+                        </select></label>
+                        <div id="gwf-length-hint" class="gwf-hint"></div>
+                        <div id="gwf-custom-length" class="gwf-custom-grid" hidden>
+                            <label>角色卡目标字数<input id="gwf-custom-character" type="number" min="300" max="12000" value="1600"></label>
+                            <label>世界书条目数<input id="gwf-custom-entry-count" type="number" min="3" max="150" value="22"></label>
+                            <label>普通条目最少字数<input id="gwf-custom-entry-min" type="number" min="40" max="1200" value="120"></label>
+                            <label>普通条目最多字数<input id="gwf-custom-entry-max" type="number" min="60" max="2000" value="240"></label>
+                            <label>重要条目字数上限<input id="gwf-custom-important-max" type="number" min="100" max="3000" value="420"></label>
+                            <label>NPC 数量<input id="gwf-custom-npc-count" type="number" min="0" max="40" value="4"></label>
+                            <label>关系条目数<input id="gwf-custom-relation-count" type="number" min="0" max="60" value="5"></label>
+                        </div>
+                        <details class="gwf-nested-details">
+                            <summary>分模块长度</summary>
+                            <div class="gwf-section-lengths">${sectionLengthRows()}</div>
+                        </details>
+                    </details>
+
+                    <details class="gwf-section">
+                        <summary>参考资料</summary>
+                        <label class="gwf-check"><input id="gwf-reference-character" type="checkbox"><span>参考当前角色卡</span></label>
+                        <label class="gwf-check"><input id="gwf-reference-lore" type="checkbox"><span>参考当前角色的主世界书</span></label>
+                        <textarea id="gwf-reference-text" rows="5" placeholder="可粘贴旧设定、灵感片段或必须保留的事实"></textarea>
+                    </details>
+
+                    <div class="gwf-generation-bar">
+                        <label class="gwf-check gwf-stream-toggle"><input id="gwf-stream" type="checkbox" checked><span>流式生成</span></label>
+                        <button id="gwf-generate" class="menu_button gwf-primary" type="button">开始创作</button>
+                        <button id="gwf-stop" class="menu_button gwf-danger" type="button" hidden>停止</button>
+                    </div>
+                    <div id="gwf-status" class="gwf-status">等待创作要求</div>
+                </aside>
+
+                <main class="gwf-result-pane">
+                    <div class="gwf-result-toolbar">
+                        <div class="gwf-tabs">
+                            <button class="gwf-tab is-active" data-tab="blueprint" type="button">蓝图编辑</button>
+                            <button class="gwf-tab" data-tab="raw" type="button">JSONL</button>
+                            <button class="gwf-tab" data-tab="compiled" type="button">编译预览</button>
+                        </div>
+                        <div id="gwf-validation" class="gwf-validation is-idle">尚未生成</div>
+                    </div>
+                    <div id="gwf-empty" class="gwf-empty">
+                        <div class="gwf-orbit">界</div>
+                        <h3>世界还在等待第一句话</h3>
+                        <p>生成时，世界、角色、NPC和关系会逐项出现在这里。</p>
+                    </div>
+                    <div id="gwf-blueprint-view" class="gwf-blueprint-view" hidden>
+                        <nav id="gwf-event-list" class="gwf-event-list"></nav>
+                        <section id="gwf-event-editor" class="gwf-event-editor"></section>
+                    </div>
+                    <div id="gwf-raw-view" class="gwf-raw-view" hidden>
+                        <textarea id="gwf-raw" spellcheck="false" readonly></textarea>
+                    </div>
+                    <div id="gwf-compiled-view" class="gwf-compiled-view" hidden>
+                        <div class="gwf-simulator">
+                            <input id="gwf-simulator-input" type="text" placeholder="输入一句聊天文本，测试世界书触发">
+                            <button id="gwf-run-simulator" class="menu_button" type="button">测试触发</button>
+                            <div id="gwf-simulator-result" class="gwf-simulator-result">等待测试文本</div>
+                        </div>
+                        <div class="gwf-compiled-columns">
+                            <section><h3>角色卡</h3><pre id="gwf-card-preview"></pre></section>
+                            <section><h3>世界书</h3><pre id="gwf-book-preview"></pre></section>
+                        </div>
+                    </div>
+                    <footer id="gwf-result-actions" class="gwf-result-actions" hidden>
+                        <div class="gwf-action-group">
+                            <button id="gwf-export-blueprint" class="menu_button" type="button">导出蓝图</button>
+                            <button id="gwf-export-jsonl" class="menu_button" type="button">导出 JSONL</button>
+                            <button id="gwf-export-world" class="menu_button" type="button">导出世界书</button>
+                            <button id="gwf-export-card" class="menu_button" type="button">下载角色卡</button>
+                        </div>
+                        <div class="gwf-action-group gwf-action-primary">
+                            <button id="gwf-copy-persona" class="menu_button" type="button" hidden>复制 User 人设</button>
+                            <button id="gwf-save-world" class="menu_button" type="button">写入世界书</button>
+                            <button id="gwf-bind-world" class="menu_button" type="button">绑定当前角色</button>
+                            <button id="gwf-create-character" class="menu_button gwf-primary" type="button">在酒馆创建角色</button>
+                        </div>
+                    </footer>
+                </main>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+    state.overlay = overlay;
+    bindUi();
+    fillForm(settings().options);
+    const draft = settings().draftEvents;
+    if (Array.isArray(draft) && draft.length) {
+        state.events = draft;
+        state.complete = validateBlueprint(draft).valid;
+        state.selectedId = draft[0]?.id || '';
+        refreshResults();
+        setStatus('已恢复上次草稿');
+    }
+    return overlay;
+}
+
+function openStudio() {
+    createOverlay().classList.add('is-open');
+    document.body.classList.add('gwf-modal-open');
+}
+
+function closeStudio() {
+    if (state.generating) {
+        notify('warning', '请先停止当前生成。');
+        return;
+    }
+    state.overlay?.classList.remove('is-open');
+    document.body.classList.remove('gwf-modal-open');
+}
+
+function createEntryPoints() {
+    if (!document.querySelector('#gwf-settings-block')) {
+        const block = document.createElement('div');
+        block.id = 'gwf-settings-block';
+        block.className = 'extension_container';
+        block.innerHTML = `
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>${DISPLAY_NAME}</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <p>使用当前酒馆连接生成角色卡与世界书，无需额外 API Key。</p>
+                    <button id="gwf-open-settings" class="menu_button" type="button">打开创作工坊</button>
+                    <label class="checkbox_label"><input id="gwf-show-fab" type="checkbox"><span>显示悬浮入口</span></label>
+                </div>
+            </div>`;
+        document.querySelector('#extensions_settings2')?.appendChild(block);
+        block.querySelector('#gwf-open-settings')?.addEventListener('click', openStudio);
+        const toggle = block.querySelector('#gwf-show-fab');
+        toggle.checked = settings().showFloatingButton !== false;
+        toggle.addEventListener('change', event => {
+            settings().showFloatingButton = Boolean(event.target.checked);
+            updateFab();
+            persistSettings();
+        });
+    }
+    if (!document.querySelector('#gwf-fab')) {
+        const fab = document.createElement('button');
+        fab.id = 'gwf-fab';
+        fab.className = 'gwf-fab';
+        fab.type = 'button';
+        fab.title = DISPLAY_NAME;
+        fab.textContent = '界';
+        fab.addEventListener('click', openStudio);
+        document.body.appendChild(fab);
+    }
+    updateFab();
+}
+
+function updateFab() {
+    const fab = document.querySelector('#gwf-fab');
+    if (fab) fab.hidden = settings().showFloatingButton === false;
+}
+
+function setStatus(message, tone = '') {
+    const element = state.overlay?.querySelector('#gwf-status');
+    if (!element) return;
+    element.textContent = message;
+    element.dataset.tone = tone;
+}
+
+function setGenerating(value) {
+    state.generating = value;
+    const generate = state.overlay?.querySelector('#gwf-generate');
+    const stop = state.overlay?.querySelector('#gwf-stop');
+    if (generate) generate.disabled = value;
+    if (stop) stop.hidden = !value;
+}
+
+function selectedValues(selector) {
+    return [...state.overlay.querySelectorAll(`${selector}:checked`)].map(input => input.value);
+}
+
+function numberValue(selector, fallback) {
+    const value = Number(state.overlay.querySelector(selector)?.value);
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function collectOptions() {
+    const options = normalizeOptions({
+        brief: state.overlay.querySelector('#gwf-brief')?.value,
+        projectName: state.overlay.querySelector('#gwf-project-name')?.value,
+        referenceText: state.overlay.querySelector('#gwf-reference-text')?.value,
+        worldPresets: selectedValues('[data-preset-group="worldPresets"]'),
+        tonePresets: selectedValues('[data-preset-group="tonePresets"]'),
+        personalityPresets: selectedValues('[data-preset-group="personalityPresets"]'),
+        relationPresets: selectedValues('[data-preset-group="relationPresets"]'),
+        classPresets: selectedValues('[data-preset-group="classPresets"]'),
+        modules: Object.fromEntries([...state.overlay.querySelectorAll('[data-module]')].map(input => [input.dataset.module, input.checked])),
+        lengthPreset: state.overlay.querySelector('#gwf-length-preset')?.value,
+        customLength: {
+            characterChars: numberValue('#gwf-custom-character', 1600),
+            entryCount: numberValue('#gwf-custom-entry-count', 22),
+            entryMinChars: numberValue('#gwf-custom-entry-min', 120),
+            entryMaxChars: numberValue('#gwf-custom-entry-max', 240),
+            importantEntryMaxChars: numberValue('#gwf-custom-important-max', 420),
+            npcCount: numberValue('#gwf-custom-npc-count', 4),
+            relationCount: numberValue('#gwf-custom-relation-count', 5),
+        },
+        sectionLengths: Object.fromEntries([...state.overlay.querySelectorAll('[data-section-length]')].map(select => {
+            const target = numberValue(`[data-section-custom="${select.dataset.sectionLength}"]`, 800);
+            return [select.dataset.sectionLength, select.value === 'custom' ? { mode: 'custom', targetChars: target } : select.value];
+        })),
+        npcCount: numberValue('#gwf-npc-count', 4),
+        relationCount: numberValue('#gwf-relation-count', 5),
+        stream: state.overlay.querySelector('#gwf-stream')?.checked,
+        referenceCurrentCharacter: state.overlay.querySelector('#gwf-reference-character')?.checked,
+        referencePrimaryLorebook: state.overlay.querySelector('#gwf-reference-lore')?.checked,
+    });
+    settings().options = options;
+    persistSettings();
+    return options;
+}
+
+function fillForm(rawOptions) {
+    const options = normalizeOptions(rawOptions);
+    const setValue = (selector, value) => {
+        const element = state.overlay.querySelector(selector);
+        if (element) element.value = value ?? '';
+    };
+    setValue('#gwf-brief', options.brief);
+    setValue('#gwf-project-name', options.projectName);
+    setValue('#gwf-reference-text', options.referenceText);
+    setValue('#gwf-length-preset', options.lengthPreset);
+    setValue('#gwf-npc-count', options.npcCount);
+    setValue('#gwf-relation-count', options.relationCount);
+    setValue('#gwf-custom-character', options.customLength.characterChars);
+    setValue('#gwf-custom-entry-count', options.customLength.entryCount);
+    setValue('#gwf-custom-entry-min', options.customLength.entryMinChars);
+    setValue('#gwf-custom-entry-max', options.customLength.entryMaxChars);
+    setValue('#gwf-custom-important-max', options.customLength.importantEntryMaxChars);
+    setValue('#gwf-custom-npc-count', options.customLength.npcCount);
+    setValue('#gwf-custom-relation-count', options.customLength.relationCount);
+    for (const input of state.overlay.querySelectorAll('[data-preset-group]')) input.checked = options[input.dataset.presetGroup]?.includes(input.value) || false;
+    for (const input of state.overlay.querySelectorAll('[data-module]')) input.checked = input.disabled || Boolean(options.modules[input.dataset.module]);
+    for (const select of state.overlay.querySelectorAll('[data-section-length]')) {
+        const selected = options.sectionLengths?.[select.dataset.sectionLength] || 'global';
+        select.value = typeof selected === 'object' ? selected.mode || 'global' : selected;
+        const custom = state.overlay.querySelector(`[data-section-custom="${select.dataset.sectionLength}"]`);
+        if (custom) custom.value = typeof selected === 'object' ? selected.targetChars || 800 : 800;
+    }
+    state.overlay.querySelector('#gwf-stream').checked = options.stream !== false;
+    state.overlay.querySelector('#gwf-reference-character').checked = options.referenceCurrentCharacter;
+    state.overlay.querySelector('#gwf-reference-lore').checked = options.referencePrimaryLorebook;
+    updateLengthUi();
+    updateSectionLengthUi();
+}
+
+function updateSectionLengthUi() {
+    for (const select of state.overlay.querySelectorAll('[data-section-length]')) {
+        const custom = state.overlay.querySelector(`[data-section-custom="${select.dataset.sectionLength}"]`);
+        if (custom) custom.hidden = select.value !== 'custom';
+    }
+}
+
+function updateLengthUi() {
+    const preset = state.overlay.querySelector('#gwf-length-preset')?.value || 'auto';
+    const custom = state.overlay.querySelector('#gwf-custom-length');
+    if (custom) custom.hidden = preset !== 'custom';
+    const options = collectOptionsWithoutSaving();
+    const plan = resolveLengthPlan(options);
+    const hint = state.overlay.querySelector('#gwf-length-hint');
+    if (hint) hint.textContent = `角色卡约 ${plan.character[0]} 至 ${plan.character[1]} 字，世界书约 ${plan.entries[0]} 至 ${plan.entries[1]} 条。`;
+}
+
+function collectOptionsWithoutSaving() {
+    const base = settings().options;
+    return normalizeOptions({
+        ...base,
+        lengthPreset: state.overlay.querySelector('#gwf-length-preset')?.value || base.lengthPreset,
+        modules: Object.fromEntries([...state.overlay.querySelectorAll('[data-module]')].map(input => [input.dataset.module, input.checked])),
+        npcCount: numberValue('#gwf-npc-count', base.npcCount),
+        relationCount: numberValue('#gwf-relation-count', base.relationCount),
+        customLength: {
+            characterChars: numberValue('#gwf-custom-character', base.customLength.characterChars),
+            entryCount: numberValue('#gwf-custom-entry-count', base.customLength.entryCount),
+            entryMinChars: numberValue('#gwf-custom-entry-min', base.customLength.entryMinChars),
+            entryMaxChars: numberValue('#gwf-custom-entry-max', base.customLength.entryMaxChars),
+            importantEntryMaxChars: numberValue('#gwf-custom-important-max', base.customLength.importantEntryMaxChars),
+            npcCount: numberValue('#gwf-custom-npc-count', base.customLength.npcCount),
+            relationCount: numberValue('#gwf-custom-relation-count', base.customLength.relationCount),
+        },
+    });
+}
+
+async function buildReferences(options) {
+    const ctx = getContext();
+    const references = { characterText: '', loreText: '' };
+    const characterId = Number(ctx.characterId);
+    const character = Number.isInteger(characterId) && characterId >= 0 ? ctx.characters?.[characterId] : null;
+    if (options.referenceCurrentCharacter && character) {
+        await ctx.unshallowCharacter?.(ctx.characterId);
+        const data = character.data || character;
+        references.characterText = JSON.stringify({
+            name: data.name || character.name,
+            description: data.description,
+            personality: data.personality,
+            scenario: data.scenario,
+            first_mes: data.first_mes,
+            mes_example: data.mes_example,
+            creator_notes: data.creator_notes,
+        }, null, 2).slice(0, 30000);
+    }
+    if (options.referencePrimaryLorebook && character) {
+        const data = character.data || character;
+        const worldName = data.extensions?.world || character.extensions?.world;
+        if (worldName) {
+            const book = await ctx.loadWorldInfo?.(worldName);
+            if (book) {
+                references.loreText = Object.values(book.entries || {})
+                    .sort((a, b) => Number(b.order || 0) - Number(a.order || 0))
+                    .map(entry => `【${entry.comment || entry.uid}】\n${entry.content || ''}`)
+                    .join('\n\n')
+                    .slice(0, 50000);
+            }
+        }
+    }
+    return references;
+}
+
+function resetGeneration() {
+    state.events = [];
+    state.raw = '';
+    state.selectedId = '';
+    state.complete = false;
+    state.savedWorldName = '';
+    state.validation = { valid: false, errors: [], warnings: [] };
+    state.styleIssues = [];
+    state.lengthIssues = [];
+    state.overlay.querySelector('#gwf-raw').value = '';
+    refreshResults();
+}
+
+async function repairMalformedJsonl(raw, options) {
+    if (!raw.trim() || raw.length > 180000) throw new Error('JSONL 过长，无法自动修复语法');
+    setStatus('检测到 JSONL 语法问题，正在修复格式', 'working');
+    const ctx = getContext();
+    const result = await generateWithFallback(ctx, {
+        systemPrompt: '你是 JSONL 语法修复器。保留全部事实和事件顺序，只修复 JSON 语法与输出协议。每行输出一个完整 JSON 对象。禁止 Markdown 与解释。',
+        prompt: `请修复以下 JSONL。最后一行必须是 done。\n\n${raw}`,
+        preferStream: false,
+        signal: state.abortController?.signal,
+    });
+    const parser = new JsonlStreamParser();
+    parser.pushCumulative(result.text);
+    const parsed = parser.finish();
+    if (parsed.errors.length) throw new Error(`自动语法修复仍有 ${parsed.errors.length} 行无法解析`);
+    return { events: parsed.events, raw: result.text };
+}
+
+async function repairContentIssues(events, issues) {
+    if (!issues.length) return events;
+    setStatus(`正在修复 ${issues.length} 个文风或长度问题`, 'working');
+    const result = await generateWithFallback(getContext(), {
+        systemPrompt: '你是结构化文本的局部修订编辑器。只按用户给出的 patch 协议输出 JSONL。',
+        prompt: buildRepairPrompt(issues, events),
+        preferStream: false,
+        signal: state.abortController?.signal,
+    });
+    return applyPatches(events, parsePatchJsonl(result.text));
+}
+
+function filterUnselectedEvents(events, options) {
+    const categoryModules = {
+        ROMANCE: 'romance',
+        INTIMACY: 'intimacy',
+        NSFW_PREFERENCE: 'nsfwPreference',
+        NSFW_BEHAVIOR: 'nsfwBehavior',
+        NSFW_DYNAMIC: 'nsfwBehavior',
+        NSFW_SPEECH: 'nsfwSpeech',
+        NSFW_PHYSIOLOGY: 'nsfwPhysiology',
+        NSFW_AFTERCARE: 'nsfwAftercare',
+        NSFW_SCENARIO: 'nsfwScenarios',
+    };
+    return events.filter(event => {
+        if (event.type === 'character' && event.role === 'user') return Boolean(options.modules.userPersona);
+        const requiredModule = categoryModules[event.category];
+        return !requiredModule || Boolean(options.modules[requiredModule]);
+    });
+}
+
+async function generateProject() {
+    if (state.generating) return;
+    const options = collectOptions();
+    if (!options.brief && !options.worldPresets.length) {
+        notify('warning', '写一点创作要求，或者至少选择一个世界预设。');
+        state.overlay.querySelector('#gwf-brief')?.focus();
+        return;
+    }
+    resetGeneration();
+    setGenerating(true);
+    state.abortController = new AbortController();
+    const plan = resolveLengthPlan(options);
+    try {
+        setStatus('正在整理参考资料', 'working');
+        const references = await buildReferences(options);
+        const systemPrompt = buildSystemPrompt();
+        const prompt = buildGenerationPrompt(options, references);
+        state.parser = new JsonlStreamParser({
+            onEvent: event => {
+                state.events.push(event);
+                state.selectedId ||= event.id;
+                refreshResults({ preserveEditor: true });
+            },
+            onError: detail => console.warn(`[${DISPLAY_NAME}] JSONL 第 ${detail.lineNumber} 行暂时无法解析`, detail.message),
+        });
+        setStatus('正在连接当前酒馆模型', 'working');
+        const result = await generateWithFallback(getContext(), {
+            systemPrompt,
+            prompt,
+            preferStream: options.stream,
+            signal: state.abortController.signal,
+            onText: (text, meta) => {
+                state.raw = text;
+                state.parser.pushCumulative(text);
+                const rawBox = state.overlay.querySelector('#gwf-raw');
+                if (rawBox) {
+                    rawBox.value = text;
+                    rawBox.scrollTop = rawBox.scrollHeight;
+                }
+                setStatus(`正在接收：${state.events.length} 个完整事件，${meta.length || text.length} 字符`, 'working');
+            },
+            onStatus: meta => {
+                if (meta.phase === 'fallback') setStatus(`流式连接未完成，已切换普通生成：${meta.reason}`, 'working');
+            },
+        });
+        let parsed = state.parser.finish(result.text);
+        state.events = parsed.events;
+        state.raw = parsed.raw;
+        if (parsed.errors.length) {
+            const repaired = await repairMalformedJsonl(state.raw, options);
+            state.events = repaired.events;
+            state.raw = repaired.raw;
+        }
+        state.events = filterUnselectedEvents(state.events, options);
+
+        let baseValidation = validateBlueprint(state.events);
+        if (!baseValidation.valid) {
+            const repaired = await repairMalformedJsonl(state.raw, options);
+            state.events = filterUnselectedEvents(repaired.events, options);
+            state.raw = repaired.raw;
+            baseValidation = validateBlueprint(state.events);
+            if (!baseValidation.valid) throw new Error(baseValidation.errors.join('；'));
+        }
+        let issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
+        if (issues.length) {
+            state.events = await repairContentIssues(state.events, issues);
+            issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
+            if (issues.length) throw new Error(`自动修复后仍有 ${issues.length} 个文风或长度问题，请在编辑区手动调整`);
+        }
+
+        state.complete = true;
+        state.selectedId ||= state.events[0]?.id || '';
+        persistDraft();
+        refreshResults();
+        setStatus(`创作完成：${aggregateBlueprint(state.events).loreEvents.length} 个世界书条目`, 'success');
+        notify('success', '世界蓝图、角色卡和世界书已经生成。');
+    } catch (error) {
+        if (state.abortController?.signal.aborted || error?.name === 'AbortError') {
+            setStatus(`已停止。保留 ${state.events.length} 个草稿事件，未写入酒馆。`, 'warning');
+        } else {
+            console.error(`[${DISPLAY_NAME}] 生成失败`, error);
+            setStatus(`生成未完成：${String(error?.message || error)}`, 'error');
+            notify('error', String(error?.message || error));
+        }
+        state.complete = false;
+        refreshResults();
+    } finally {
+        state.abortController = null;
+        state.parser = null;
+        setGenerating(false);
+    }
+}
+
+function stopGeneration() {
+    state.abortController?.abort(new DOMException('用户停止生成', 'AbortError'));
+    try { getContext().stopGeneration?.(); } catch { /* host fallback */ }
+}
+
+function persistDraft() {
+    try {
+        const serialized = JSON.stringify(state.events);
+        settings().draftEvents = serialized.length <= 600000 ? state.events : [];
+        persistSettings();
+    } catch {
+        settings().draftEvents = [];
+    }
+}
+
+function eventLabel(event) {
+    if (event.type === 'project') return event.name || '项目';
+    if (event.type === 'character') return `${event.role === 'user' ? 'User' : '角色'}：${event.name || event.id}`;
+    return event.title || event.id;
+}
+
+function eventHasIssue(id) {
+    return [...state.styleIssues, ...state.lengthIssues].some(issue => issue.id === id);
+}
+
+function refreshResults({ preserveEditor = false } = {}) {
+    if (!state.overlay) return;
+    const hasEvents = state.events.length > 0;
+    state.overlay.querySelector('#gwf-empty').hidden = hasEvents;
+    state.overlay.querySelector('#gwf-result-actions').hidden = !hasEvents;
+    state.overlay.querySelector('#gwf-blueprint-view').hidden = !hasEvents || state.activeTab !== 'blueprint';
+    state.overlay.querySelector('#gwf-raw-view').hidden = !hasEvents || state.activeTab !== 'raw';
+    state.overlay.querySelector('#gwf-compiled-view').hidden = !hasEvents || state.activeTab !== 'compiled';
+    if (!hasEvents) return;
+
+    state.validation = validateBlueprint(state.events, { requireDone: state.complete });
+    state.styleIssues = findStyleIssues(state.events);
+    state.lengthIssues = findLengthIssues(state.events, resolveLengthPlan(collectOptionsWithoutSaving()));
+    const issueCount = state.styleIssues.length + state.lengthIssues.length;
+    const validation = state.overlay.querySelector('#gwf-validation');
+    const ready = state.complete && state.validation.valid && issueCount === 0;
+    validation.className = `gwf-validation ${ready ? 'is-valid' : state.generating ? 'is-working' : 'is-invalid'}`;
+    validation.textContent = ready
+        ? `可写入酒馆 · ${state.events.length} 个事件`
+        : state.generating
+            ? `生成中 · ${state.events.length} 个事件`
+            : `${state.validation.errors.length + issueCount} 个待处理问题`;
+
+    const list = state.overlay.querySelector('#gwf-event-list');
+    list.innerHTML = state.events.map(event => `
+        <button type="button" class="gwf-event-item ${event.id === state.selectedId ? 'is-active' : ''} ${eventHasIssue(event.id) ? 'has-issue' : ''}" data-event-id="${escapeHtml(event.id)}">
+            <span class="gwf-event-type">${escapeHtml(event.type)}</span>
+            <span class="gwf-event-name">${escapeHtml(eventLabel(event))}</span>
+        </button>`).join('');
+    list.querySelectorAll('[data-event-id]').forEach(button => button.addEventListener('click', () => {
+        state.selectedId = button.dataset.eventId;
+        refreshResults();
+    }));
+    if (!preserveEditor || !state.overlay.querySelector('#gwf-event-editor [data-field]:focus')) renderEditor();
+    state.overlay.querySelector('#gwf-raw').value = serializeJsonl(state.events);
+    updateCompiledPreview();
+    updateActionState(ready);
+}
+
+function field(label, path, value, { area = false, kind = 'string', rows = 3, readonly = false } = {}) {
+    const content = area
+        ? `<textarea data-field="${path}" data-kind="${kind}" rows="${rows}" ${readonly ? 'readonly' : ''}>${escapeHtml(value ?? '')}</textarea>`
+        : `<input data-field="${path}" data-kind="${kind}" type="${kind === 'number' ? 'number' : 'text'}" value="${escapeHtml(value ?? '')}" ${readonly ? 'readonly' : ''}>`;
+    return `<label class="gwf-editor-field"><span>${escapeHtml(label)}</span>${content}</label>`;
+}
+
+function selectField(label, path, value, options) {
+    return `<label class="gwf-editor-field"><span>${escapeHtml(label)}</span><select data-field="${path}">${options.map(option => `<option value="${option}" ${option === value ? 'selected' : ''}>${option}</option>`).join('')}</select></label>`;
+}
+
+function renderEditor() {
+    const editor = state.overlay.querySelector('#gwf-event-editor');
+    const event = state.events.find(item => item.id === state.selectedId) || state.events[0];
+    if (!event) {
+        editor.innerHTML = '';
+        return;
+    }
+    state.selectedId = event.id;
+    let html = `<div class="gwf-editor-heading"><div><span>${escapeHtml(event.type)}</span><h3>${escapeHtml(eventLabel(event))}</h3></div><code>${escapeHtml(event.id)}</code></div>`;
+    if (event.type === 'project') {
+        html += field('项目名', 'name', event.name)
+            + field('统一方向', 'summary', event.summary, { area: true, rows: 6 })
+            + field('标签，用逗号分隔', 'tags', (event.tags || []).join(', '), { kind: 'array' });
+    } else if (event.type === 'character') {
+        html += field('角色类型', 'role', event.role, { readonly: true })
+            + field('姓名', 'name', event.name)
+            + field('别名，用逗号分隔', 'aliases', (event.aliases || []).join(', '), { kind: 'array' })
+            + field('角色描述', 'description', event.description, { area: true, rows: 12 })
+            + field('性格与行为逻辑', 'personality', event.personality, { area: true, rows: 8 })
+            + field('场景', 'scenario', event.scenario, { area: true, rows: 7 })
+            + field('开场白', 'firstMessage', event.firstMessage, { area: true, rows: 9 })
+            + field('示例对话', 'exampleDialogue', event.exampleDialogue, { area: true, rows: 8 })
+            + field('系统提示', 'systemPrompt', event.systemPrompt, { area: true, rows: 5 })
+            + field('历史后指令', 'postHistoryInstructions', event.postHistoryInstructions, { area: true, rows: 5 })
+            + field('作者备注', 'creatorNotes', event.creatorNotes, { area: true, rows: 5 })
+            + field('备用开场白，每行一条', 'alternateGreetings', (event.alternateGreetings || []).join('\n'), { area: true, rows: 5, kind: 'lines' })
+            + field('标签，用逗号分隔', 'tags', (event.tags || []).join(', '), { kind: 'array' });
+    } else if (event.type === 'done') {
+        html += `<pre class="gwf-json-preview">${escapeHtml(JSON.stringify(event, null, 2))}</pre>`;
+    } else {
+        html += field('标题', 'title', event.title)
+            + selectField('类别', 'category', event.category, [event.category, ...LORE_CATEGORIES].filter((value, index, array) => array.indexOf(value) === index))
+            + field('正文', 'content', event.content, { area: true, rows: 14 })
+            + field('主关键词，用逗号分隔', 'keys', (event.keys || []).join(', '), { kind: 'array' })
+            + field('次关键词，用逗号分隔', 'secondaryKeys', (event.secondaryKeys || []).join(', '), { kind: 'array' })
+            + field('别名，用逗号分隔', 'aliases', (event.aliases || []).join(', '), { kind: 'array' })
+            + selectField('重要程度', 'importance', event.importance, ['critical', 'high', 'medium', 'low'])
+            + selectField('激活方式', 'activation.mode', event.activation?.mode, ['constant', 'keyword', 'selective', 'probability', 'state'])
+            + field('概率', 'activation.probability', event.activation?.probability ?? 100, { kind: 'number' })
+            + field('持续消息数', 'persistence.sticky', event.persistence?.sticky ?? 0, { kind: 'number' })
+            + field('冷却消息数', 'persistence.cooldown', event.persistence?.cooldown ?? 0, { kind: 'number' })
+            + field('聊天长度门槛', 'persistence.delay', event.persistence?.delay ?? 0, { kind: 'number' })
+            + field('依赖条目，用逗号分隔', 'dependencies', (event.dependencies || []).join(', '), { kind: 'array' });
+    }
+    const eventIssues = [...state.styleIssues, ...state.lengthIssues].filter(issue => issue.id === event.id);
+    if (eventIssues.length) html += `<div class="gwf-editor-issues">${eventIssues.map(issue => `<p>${escapeHtml(issue.path)}：${escapeHtml(issue.reason)}</p>`).join('')}</div>`;
+    editor.innerHTML = html;
+    editor.querySelectorAll('[data-field]').forEach(control => control.addEventListener('input', () => {
+        updateEventField(event, control.dataset.field, control.value, control.dataset.kind || 'string');
+        state.complete = validateBlueprint(state.events).valid;
+        persistDraft();
+        refreshResults({ preserveEditor: true });
+    }));
+}
+
+function updateEventField(event, path, rawValue, kind) {
+    let value = rawValue;
+    if (kind === 'number') value = Number(rawValue) || 0;
+    if (kind === 'array') value = rawValue.split(/[,，]/u).map(item => item.trim()).filter(Boolean);
+    if (kind === 'lines') value = rawValue.split(/\r?\n/u).map(item => item.trim()).filter(Boolean);
+    const parts = path.split('.');
+    let cursor = event;
+    for (const part of parts.slice(0, -1)) {
+        cursor[part] ??= {};
+        cursor = cursor[part];
+    }
+    cursor[parts.at(-1)] = value;
+}
+
+function updateCompiledPreview() {
+    const cardPreview = state.overlay.querySelector('#gwf-card-preview');
+    const bookPreview = state.overlay.querySelector('#gwf-book-preview');
+    if (!cardPreview || !bookPreview) return;
+    try {
+        const blueprint = aggregateBlueprint(state.events);
+        const book = compileWorldBook(blueprint);
+        const card = compileCharacterCard(blueprint);
+        cardPreview.textContent = JSON.stringify(card, null, 2).slice(0, 18000);
+        bookPreview.textContent = JSON.stringify(book, null, 2).slice(0, 18000);
+    } catch (error) {
+        cardPreview.textContent = String(error?.message || error);
+        bookPreview.textContent = String(error?.message || error);
+    }
+}
+
+async function runTriggerSimulator() {
+    const text = state.overlay.querySelector('#gwf-simulator-input')?.value || '';
+    const outlet = state.overlay.querySelector('#gwf-simulator-result');
+    if (!text.trim()) {
+        outlet.textContent = '请先输入一段聊天文本。';
+        return;
+    }
+    try {
+        const simulation = simulateLoreActivation(state.events, text);
+        let tokenText = `约 ${simulation.totalChars} 个字符`;
+        try {
+            const compiled = compileWorldBook(state.events);
+            const contents = simulation.results.map(result => compiled.entries[result.uid]?.content || '').join('\n');
+            const tokens = await getContext().getTokenCountAsync?.(contents);
+            if (Number.isFinite(tokens)) tokenText = `约 ${tokens} tokens`;
+        } catch { /* character estimate remains available */ }
+        outlet.innerHTML = simulation.results.length
+            ? `<strong>触发 ${simulation.results.length} 条，${escapeHtml(tokenText)}</strong>${simulation.results.map(result => `<span><b>${escapeHtml(result.phase)}</b>${escapeHtml(result.title)}${result.probability < 100 ? `，候选概率 ${result.probability}%` : ''}</span>`).join('')}`
+            : '<strong>没有条目被触发</strong><span>可以检查关键词是否过窄，或确认条目是否为常驻。</span>';
+    } catch (error) {
+        outlet.textContent = String(error?.message || error);
+    }
+}
+
+function updateActionState(ready) {
+    for (const id of ['#gwf-export-world', '#gwf-export-card', '#gwf-save-world', '#gwf-bind-world', '#gwf-create-character']) {
+        const button = state.overlay.querySelector(id);
+        if (button) button.disabled = !ready;
+    }
+    const persona = aggregateBlueprint(state.events).userPersona;
+    const copy = state.overlay.querySelector('#gwf-copy-persona');
+    if (copy) {
+        copy.hidden = !persona;
+        copy.disabled = !persona;
+    }
+}
+
+function switchTab(tab) {
+    state.activeTab = tab;
+    state.overlay.querySelectorAll('.gwf-tab').forEach(button => button.classList.toggle('is-active', button.dataset.tab === tab));
+    refreshResults();
+}
+
+function safeFileName(value) {
+    return String(value || 'gaga-world-project').replace(/[\\/:*?"<>|]+/gu, '_').trim().slice(0, 80) || 'gaga-world-project';
+}
+
+function downloadText(name, content, type = 'application/json') {
+    const blob = new Blob([content], { type: `${type};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function currentProjectName() {
+    return aggregateBlueprint(state.events).project?.name || '未命名项目';
+}
+
+function exportBlueprint() {
+    downloadText(`${safeFileName(currentProjectName())}.blueprint.json`, serializeBlueprint(state.events));
+}
+
+function exportJsonl() {
+    downloadText(`${safeFileName(currentProjectName())}.jsonl`, serializeJsonl(state.events), 'application/x-ndjson');
+}
+
+function exportWorldBook() {
+    const name = `${currentProjectName()} 世界书`;
+    downloadText(`${safeFileName(name)}.json`, JSON.stringify(compileWorldBook(state.events, name), null, 2));
+}
+
+function selectedCharacterForAction() {
+    const selected = state.events.find(event => event.id === state.selectedId && event.type === 'character' && event.role !== 'user');
+    return selected || aggregateBlueprint(state.events).mainCharacter;
+}
+
+function exportCharacterCard() {
+    const character = selectedCharacterForAction();
+    const card = compileCharacterCard(state.events, character, { worldBookName: state.savedWorldName || `${currentProjectName()} 世界书`, embedBook: true });
+    downloadText(`${safeFileName(character.name)}.json`, JSON.stringify(card, null, 2));
+}
+
+async function copyPersona() {
+    const text = compilePersonaText(state.events);
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    notify('success', 'User 人设已复制。');
+}
+
+function uniqueWorldName(baseName, names) {
+    if (!names.includes(baseName)) return baseName;
+    for (let index = 2; index < 10000; index += 1) {
+        const candidate = `${baseName} (${index})`;
+        if (!names.includes(candidate)) return candidate;
+    }
+    return `${baseName} ${Date.now()}`;
+}
+
+async function saveWorldBookToST() {
+    const ctx = getContext();
+    const baseName = `${currentProjectName()} 世界书`;
+    const updating = Boolean(state.savedWorldName);
+    const name = state.savedWorldName || uniqueWorldName(baseName, ctx.getWorldInfoNames?.() || []);
+    const book = compileWorldBook(state.events, name);
+    await ctx.saveWorldInfo(name, book, true);
+    await ctx.updateWorldInfoList?.();
+    state.savedWorldName = name;
+    notify('success', `世界书“${name}”已${updating ? '更新' : '写入'}酒馆。`);
+    setStatus(`世界书已${updating ? '更新' : '写入'}：${name}`, 'success');
+    return name;
+}
+
+async function bindWorldToCurrentCharacter() {
+    const ctx = getContext();
+    const characterId = Number(ctx.characterId);
+    const character = Number.isInteger(characterId) && characterId >= 0 ? ctx.characters?.[characterId] : null;
+    if (!character?.avatar) throw new Error('请先在酒馆中选择需要绑定的角色');
+    const worldName = await saveWorldBookToST();
+    const response = await fetch('/api/characters/merge-attributes', {
+        method: 'POST',
+        headers: ctx.getRequestHeaders(),
+        body: JSON.stringify({ avatar: character.avatar, data: { extensions: { world: worldName } } }),
+    });
+    if (!response.ok) throw new Error(`绑定失败：${response.status}`);
+    await ctx.getOneCharacter?.(character.avatar);
+    notify('success', `已把“${worldName}”设为当前角色的主世界书。`);
+}
+
+async function createCharacterInST() {
+    const ctx = getContext();
+    const character = selectedCharacterForAction();
+    if (!character) throw new Error('没有可创建的角色事件');
+    const worldName = await saveWorldBookToST();
+    const card = compileCharacterCard(state.events, character, { worldBookName: worldName, embedBook: true });
+    const file = new File([JSON.stringify(card)], `${safeFileName(character.name)}.json`, { type: 'application/json' });
+    const formData = new FormData();
+    formData.append('avatar', file);
+    formData.append('file_type', 'json');
+    formData.append('user_name', String(ctx.name1 || 'User'));
+    const response = await fetch('/api/characters/import', {
+        method: 'POST',
+        headers: ctx.getRequestHeaders({ omitContentType: true }),
+        body: formData,
+        cache: 'no-cache',
+    });
+    if (!response.ok) throw new Error(`角色创建失败：${response.statusText}`);
+    const result = await response.json();
+    if (result.error) throw new Error(String(result.error));
+    await ctx.getCharacters?.();
+    notify('success', `角色“${character.name}”已创建，并绑定主世界书“${worldName}”。`);
+}
+
+async function runAction(action) {
+    try {
+        await action();
+    } catch (error) {
+        console.error(`[${DISPLAY_NAME}] 操作失败`, error);
+        notify('error', String(error?.message || error));
+    }
+}
+
+function bindUi() {
+    const root = state.overlay;
+    root.querySelector('#gwf-close').addEventListener('click', closeStudio);
+    root.addEventListener('click', event => {
+        if (event.target === root) closeStudio();
+    });
+    root.querySelector('#gwf-generate').addEventListener('click', generateProject);
+    root.querySelector('#gwf-stop').addEventListener('click', stopGeneration);
+    root.querySelector('#gwf-length-preset').addEventListener('change', updateLengthUi);
+    root.querySelectorAll('[data-section-length]').forEach(select => select.addEventListener('change', updateSectionLengthUi));
+    root.querySelectorAll('[data-module], #gwf-npc-count, #gwf-relation-count, #gwf-custom-character, #gwf-custom-entry-count, #gwf-custom-entry-min, #gwf-custom-entry-max')
+        .forEach(control => control.addEventListener('change', updateLengthUi));
+    root.querySelectorAll('.gwf-tab').forEach(button => button.addEventListener('click', () => switchTab(button.dataset.tab)));
+    root.querySelector('#gwf-export-blueprint').addEventListener('click', exportBlueprint);
+    root.querySelector('#gwf-export-jsonl').addEventListener('click', exportJsonl);
+    root.querySelector('#gwf-export-world').addEventListener('click', exportWorldBook);
+    root.querySelector('#gwf-export-card').addEventListener('click', exportCharacterCard);
+    root.querySelector('#gwf-copy-persona').addEventListener('click', () => runAction(copyPersona));
+    root.querySelector('#gwf-save-world').addEventListener('click', () => runAction(saveWorldBookToST));
+    root.querySelector('#gwf-bind-world').addEventListener('click', () => runAction(bindWorldToCurrentCharacter));
+    root.querySelector('#gwf-create-character').addEventListener('click', () => runAction(createCharacterInST));
+    root.querySelector('#gwf-run-simulator').addEventListener('click', runTriggerSimulator);
+    root.querySelector('#gwf-simulator-input').addEventListener('keydown', event => {
+        if (event.key === 'Enter') runTriggerSimulator();
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && root.classList.contains('is-open')) closeStudio();
+    });
+}
+
+export async function init() {
+    try {
+        settings();
+        createEntryPoints();
+        console.info(`[${DISPLAY_NAME}] v${VERSION} loaded as ${EXTENSION_NAME}.`);
+    } catch (error) {
+        console.error(`[${DISPLAY_NAME}] 初始化失败`, error);
+    }
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+else init();

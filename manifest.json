@@ -1,0 +1,13 @@
+{
+  "display_name": "嘎嘎世界与角色工坊",
+  "loading_order": 61,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Puppy Yoho",
+  "version": "0.1.0",
+  "license": "All Rights Reserved",
+  "auto_update": false,
+  "minimum_client_version": "1.18.0"
+}
