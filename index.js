@@ -53,6 +53,7 @@ const state = {
     validation: { valid: false, errors: [], warnings: [] },
     styleIssues: [],
     lengthIssues: [],
+    shellOffset: { x: 0, y: 0 },
 };
 
 function getContext() {
@@ -135,7 +136,7 @@ function createOverlay() {
     overlay.className = 'gwf-overlay';
     overlay.innerHTML = `
         <div class="gwf-shell" role="dialog" aria-modal="true" aria-label="${DISPLAY_NAME}">
-            <header class="gwf-header">
+            <header class="gwf-header" title="拖动此处移动窗口">
                 <div>
                     <div class="gwf-eyebrow">SillyTavern Creation Studio</div>
                     <h2>${DISPLAY_NAME}</h2>
@@ -272,8 +273,11 @@ function createOverlay() {
 }
 
 function openStudio() {
-    createOverlay().classList.add('is-open');
+    const overlay = createOverlay();
+    overlay.classList.add('is-open');
     document.body.classList.add('gwf-modal-open');
+    const shell = overlay.querySelector('.gwf-shell');
+    if (shell) keepShellInViewport(overlay, shell);
 }
 
 function closeStudio() {
@@ -283,6 +287,104 @@ function closeStudio() {
     }
     state.overlay?.classList.remove('is-open');
     document.body.classList.remove('gwf-modal-open');
+}
+
+function applyShellOffset(shell) {
+    const { x, y } = state.shellOffset;
+    shell.style.transform = x || y ? `translate3d(${x}px, ${y}px, 0)` : '';
+}
+
+function keepShellInViewport(root, shell) {
+    const shellRect = shell.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    if (!shellRect.width || !shellRect.height || !rootRect.width || !rootRect.height) return;
+    const padding = 10;
+    const minLeft = rootRect.left + padding;
+    const minTop = rootRect.top + padding;
+    const maxLeft = Math.max(minLeft, rootRect.right - shellRect.width - padding);
+    const maxTop = Math.max(minTop, rootRect.bottom - shellRect.height - padding);
+    const left = Math.min(Math.max(shellRect.left, minLeft), maxLeft);
+    const top = Math.min(Math.max(shellRect.top, minTop), maxTop);
+    const deltaX = left - shellRect.left;
+    const deltaY = top - shellRect.top;
+
+    if (deltaX || deltaY) {
+        state.shellOffset = {
+            x: state.shellOffset.x + deltaX,
+            y: state.shellOffset.y + deltaY,
+        };
+        applyShellOffset(shell);
+    }
+}
+
+function bindShellDrag(root) {
+    const shell = root.querySelector('.gwf-shell');
+    const handle = root.querySelector('.gwf-header');
+    if (!shell || !handle) return;
+
+    const drag = {
+        active: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        startLeft: 0,
+        startTop: 0,
+        startOffsetX: 0,
+        startOffsetY: 0,
+    };
+
+    const stopDragging = event => {
+        if (!drag.active || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
+        drag.active = false;
+        shell.classList.remove('is-dragging');
+        if (event.pointerId != null && handle.hasPointerCapture?.(event.pointerId)) {
+            handle.releasePointerCapture(event.pointerId);
+        }
+    };
+
+    handle.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || event.target.closest?.('button, a, input, textarea, select, [contenteditable="true"]')) return;
+
+        const shellRect = shell.getBoundingClientRect();
+        drag.active = true;
+        drag.pointerId = event.pointerId;
+        drag.startX = event.clientX;
+        drag.startY = event.clientY;
+        drag.startLeft = shellRect.left;
+        drag.startTop = shellRect.top;
+        drag.startOffsetX = state.shellOffset.x;
+        drag.startOffsetY = state.shellOffset.y;
+        shell.classList.add('is-dragging');
+        handle.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', event => {
+        if (!drag.active || event.pointerId !== drag.pointerId) return;
+
+        const rootRect = root.getBoundingClientRect();
+        const shellRect = shell.getBoundingClientRect();
+        const padding = 10;
+        const minLeft = rootRect.left + padding;
+        const minTop = rootRect.top + padding;
+        const maxLeft = Math.max(minLeft, rootRect.right - shellRect.width - padding);
+        const maxTop = Math.max(minTop, rootRect.bottom - shellRect.height - padding);
+        const left = Math.min(Math.max(drag.startLeft + event.clientX - drag.startX, minLeft), maxLeft);
+        const top = Math.min(Math.max(drag.startTop + event.clientY - drag.startY, minTop), maxTop);
+
+        state.shellOffset = {
+            x: drag.startOffsetX + left - drag.startLeft,
+            y: drag.startOffsetY + top - drag.startTop,
+        };
+        applyShellOffset(shell);
+        event.preventDefault();
+    });
+
+    handle.addEventListener('pointerup', stopDragging);
+    handle.addEventListener('pointercancel', stopDragging);
+    handle.addEventListener('lostpointercapture', stopDragging);
+    window.addEventListener('resize', () => keepShellInViewport(root, shell), { passive: true });
+    applyShellOffset(shell);
 }
 
 function createEntryPoints() {
@@ -975,6 +1077,7 @@ async function runAction(action) {
 
 function bindUi() {
     const root = state.overlay;
+    bindShellDrag(root);
     root.querySelector('#gwf-close').addEventListener('click', closeStudio);
     root.addEventListener('click', event => {
         if (event.target === root) closeStudio();

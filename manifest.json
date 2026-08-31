@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Puppy Yoho",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "All Rights Reserved",
   "auto_update": false,
   "minimum_client_version": "1.18.0"

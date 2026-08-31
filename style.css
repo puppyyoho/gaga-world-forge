@@ -49,9 +49,15 @@ body.gwf-modal-open {
     inset: 0;
     z-index: 10020;
     display: none;
+    box-sizing: border-box;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
     align-items: center;
     justify-content: center;
     padding: 18px;
+    overflow: auto;
+    overscroll-behavior: contain;
     background: rgba(8, 7, 11, 0.76);
     backdrop-filter: blur(11px);
 }
@@ -65,6 +71,12 @@ body.gwf-modal-open {
     grid-template-rows: auto minmax(0, 1fr);
     width: min(1540px, 98vw);
     height: min(940px, 96vh);
+    height: min(940px, 96dvh);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    box-sizing: border-box;
+    min-height: 0;
     overflow: hidden;
     color: var(--gwf-ink);
     border: 1px solid rgba(255, 229, 207, 0.16);
@@ -83,7 +95,13 @@ body.gwf-modal-open {
     min-height: 76px;
     padding: 15px 22px;
     border-bottom: 1px solid var(--gwf-line);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
 }
+
+.gwf-shell.is-dragging .gwf-header { cursor: grabbing; }
+.gwf-header button { cursor: pointer; }
 
 .gwf-header h2 {
     margin: 2px 0 0;
@@ -671,7 +689,15 @@ body.gwf-modal-open {
 
 @media (max-width: 1100px) {
     .gwf-overlay { padding: 0; }
-    .gwf-shell { width: 100vw; height: 100dvh; border-radius: 0; }
+    .gwf-shell {
+        width: 100vw;
+        max-width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        max-height: 100vh;
+        max-height: 100dvh;
+        border-radius: 0;
+    }
     .gwf-workspace { grid-template-columns: minmax(310px, 38vw) minmax(0, 1fr); }
     .gwf-result-actions { align-items: flex-start; flex-direction: column; }
     .gwf-action-primary { margin-left: 0; }
