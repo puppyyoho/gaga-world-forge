@@ -1,7 +1,7 @@
 export const EXTENSION_NAME = 'gaga-world-forge';
 export const DISPLAY_NAME = '嘎嘎世界与角色工坊';
 export const SETTINGS_KEY = 'gagaWorldForge';
-export const VERSION = '0.1.6';
+export const VERSION = '0.1.7';
 
 export const THEME_OPTIONS = [
     { id: 'twilight', label: '暮色紫粉', shortLabel: '紫粉' },
@@ -9,6 +9,10 @@ export const THEME_OPTIONS = [
     { id: 'forest', label: '森林青绿', shortLabel: '青绿' },
     { id: 'amber', label: '琥珀暖金', shortLabel: '暖金' },
     { id: 'rose', label: '玫瑰酒红', shortLabel: '酒红' },
+    { id: 'blossom', label: '樱花奶霜', shortLabel: '樱粉' },
+    { id: 'cloud', label: '晴空云白', shortLabel: '晴蓝' },
+    { id: 'mint', label: '薄荷牛乳', shortLabel: '薄荷' },
+    { id: 'vanilla', label: '香草奶杏', shortLabel: '奶杏' },
 ];
 
 const THEME_IDS = new Set(THEME_OPTIONS.map(theme => theme.id));

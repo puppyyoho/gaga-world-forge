@@ -140,6 +140,10 @@ test('complete blueprint validates and aggregates', () => {
 
 test('theme options normalize to a supported palette', () => {
     assert.equal(normalizeOptions({ theme: 'forest' }).theme, 'forest');
+    assert.equal(normalizeOptions({ theme: 'blossom' }).theme, 'blossom');
+    assert.equal(normalizeOptions({ theme: 'cloud' }).theme, 'cloud');
+    assert.equal(normalizeOptions({ theme: 'mint' }).theme, 'mint');
+    assert.equal(normalizeOptions({ theme: 'vanilla' }).theme, 'vanilla');
     assert.equal(normalizeOptions({ theme: 'unknown-theme' }).theme, 'twilight');
 });
 

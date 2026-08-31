@@ -152,7 +152,6 @@ function createOverlay() {
                     <h2>${DISPLAY_NAME}</h2>
                 </div>
                 <div class="gwf-header-actions">
-                    <span class="gwf-drag-indicator" aria-hidden="true">⠿ 拖动</span>
                     <label class="gwf-header-theme">
                         <span>配色</span>
                         <select id="gwf-theme-header" aria-label="配色方案">
@@ -506,7 +505,7 @@ function createEntryPoints() {
         fab.className = 'gwf-fab';
         fab.type = 'button';
         fab.title = DISPLAY_NAME;
-        fab.textContent = '界';
+        fab.setAttribute('aria-label', `打开${DISPLAY_NAME}`);
         fab.addEventListener('click', openStudio);
         document.body.appendChild(fab);
     }
