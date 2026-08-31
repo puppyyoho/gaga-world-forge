@@ -1,0 +1,219 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { resolveLengthPlan } from '../studio-data.js';
+import {
+    JsonlStreamParser,
+    aggregateBlueprint,
+    applyPatches,
+    findStyleIssues,
+    findLengthIssues,
+    parsePatchJsonl,
+    validateBlueprint,
+} from '../jsonl.js';
+import { compileCharacterCard, compileWorldBook, simulateLoreActivation } from '../compiler.js';
+
+function sampleEvents() {
+    return [
+        {
+            type: 'project',
+            id: 'project.main',
+            name: '槐青中学',
+            summary: '奖学金制度与校董资源共同影响学生生活，旧教学楼改造引出持续矛盾。',
+            tags: ['校园', '日常'],
+            recommendedSettings: { scanDepth: 2, budgetPercent: 25, recursiveScanning: true },
+        },
+        {
+            type: 'world',
+            id: 'world.scholarship',
+            category: 'RULE',
+            title: '[RULE] 奖学金考核',
+            content: '槐青中学每月审核奖学金生的成绩、出勤与纪律记录，任何一次处分都会影响下月生活补助。',
+            aliases: ['助学金考核'],
+            keys: ['奖学金', '生活补助'],
+            secondaryKeys: [],
+            activation: { mode: 'keyword', selectiveLogic: 'AND_ANY', probability: 100 },
+            importance: 'high',
+            persistence: { sticky: 0, cooldown: 0, delay: 0 },
+            dependencies: [],
+            preventRecursion: false,
+            entityId: '',
+            aspect: '',
+        },
+        {
+            type: 'character',
+            id: 'character.main',
+            role: 'main',
+            name: '林知遥',
+            aliases: ['知遥'],
+            description: '林知遥靠奖学金住校，习惯先核对价格再做决定。她把每天的餐费写在练习册最后一页。',
+            personality: '遇到质疑时，她先问清具体标准，再逐条回应。',
+            scenario: '旧教学楼改造方案进入学生听证阶段。',
+            firstMessage: '林知遥把表格推过来，指尖压住空着的预算栏。你这里准备填多少？',
+            exampleDialogue: '<START>\n{{user}}: 你很在意这笔钱？\n{{char}}: 先把数算清楚，后面才有选择。',
+            systemPrompt: '',
+            postHistoryInstructions: '',
+            creatorNotes: '校园长期互动角色。',
+            alternateGreetings: [],
+            tags: ['校园'],
+        },
+        {
+            type: 'npc',
+            id: 'npc.chen.base',
+            category: 'NPC',
+            title: '[NPC] 陈砚舟基础印象',
+            content: '陈砚舟负责学生会预算，开会前会把各部门数字抄进同一张表，遇到含糊申请就当场追问用途。',
+            aliases: ['陈砚舟', '陈会长'],
+            keys: ['陈砚舟', '陈会长'],
+            secondaryKeys: [],
+            activation: { mode: 'keyword', selectiveLogic: 'AND_ANY', probability: 100 },
+            importance: 'medium',
+            persistence: { sticky: 0, cooldown: 0, delay: 0 },
+            dependencies: [],
+            preventRecursion: true,
+            entityId: 'npc.chen',
+            aspect: 'base',
+            tier: 'minor',
+        },
+        {
+            type: 'relation',
+            id: 'relation.lin_chen',
+            category: 'REL',
+            title: '[REL] 林知遥与陈砚舟',
+            content: '两人常用预算表交流，林知遥负责核对实际支出，陈砚舟负责争取审批。拖延报账会触发双方争执。',
+            aliases: [],
+            keys: ['林知遥', '陈砚舟', '报账'],
+            secondaryKeys: [],
+            activation: { mode: 'selective', selectiveLogic: 'AND_ANY', probability: 100 },
+            importance: 'medium',
+            persistence: { sticky: 0, cooldown: 0, delay: 0 },
+            dependencies: [],
+            preventRecursion: true,
+            entityId: '',
+            aspect: '',
+            participants: ['林知遥', '陈砚舟'],
+        },
+        {
+            type: 'lore',
+            id: 'lore.hearing',
+            category: 'HOOK',
+            title: '[HOOK] 学生听证会',
+            content: '旧教学楼听证会将在周五举行，材料室缺少三年前的维修报价，任何找到原件的人都能改变讨论方向。',
+            aliases: ['周五听证会'],
+            keys: ['听证会', '维修报价'],
+            secondaryKeys: [],
+            activation: { mode: 'keyword', selectiveLogic: 'AND_ANY', probability: 100 },
+            importance: 'high',
+            persistence: { sticky: 2, cooldown: 3, delay: 0 },
+            dependencies: ['world.scholarship'],
+            preventRecursion: true,
+            entityId: '',
+            aspect: '',
+        },
+        {
+            type: 'done',
+            id: 'done',
+            counts: { project: 1, world: 1, character: 1, npc: 1, relation: 1, lore: 1 },
+        },
+    ];
+}
+
+test('JSONL parser accepts cumulative chunks split inside an object', () => {
+    const source = sampleEvents().map(event => JSON.stringify(event)).join('\n');
+    const parser = new JsonlStreamParser();
+    parser.pushCumulative(source.slice(0, 170));
+    parser.pushCumulative(source.slice(0, 700));
+    parser.pushCumulative(source);
+    const result = parser.finish();
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.events.length, sampleEvents().length);
+    assert.equal(result.events.at(-1).type, 'done');
+});
+
+test('complete blueprint validates and aggregates', () => {
+    const events = sampleEvents();
+    const result = validateBlueprint(events);
+    assert.equal(result.valid, true);
+    const blueprint = aggregateBlueprint(events);
+    assert.equal(blueprint.mainCharacter.name, '林知遥');
+    assert.equal(blueprint.loreEvents.length, 4);
+});
+
+test('style scanner catches contrast sentences and dash characters', () => {
+    const events = sampleEvents();
+    events[0].summary = '这不是普通考核，而是一场资源竞赛。';
+    events[2].description = '她翻开账本—逐项核对。';
+    const issues = findStyleIssues(events);
+    assert.equal(issues.some(issue => issue.reason.includes('对照句式')), true);
+    assert.equal(issues.some(issue => issue.reason.includes('破折号')), true);
+});
+
+test('patch events update only requested paths', () => {
+    const events = sampleEvents();
+    const patches = parsePatchJsonl('{"type":"patch","id":"character.main","changes":{"description":"新的完整描述"}}');
+    const updated = applyPatches(events, patches);
+    assert.equal(updated[2].description, '新的完整描述');
+    assert.equal(updated[2].name, '林知遥');
+    assert.notEqual(updated, events);
+});
+
+test('worldbook compiler creates deterministic native entries', () => {
+    const first = compileWorldBook(sampleEvents(), '测试世界书');
+    const second = compileWorldBook(sampleEvents(), '测试世界书');
+    assert.deepEqual(Object.keys(first.entries), Object.keys(second.entries));
+    assert.equal(Object.keys(first.entries).length, 4);
+    const hook = Object.values(first.entries).find(entry => entry.comment.includes('学生听证会'));
+    assert.equal(hook.sticky, 2);
+    assert.equal(hook.cooldown, 3);
+    assert.equal(hook.matchWholeWords, false);
+    assert.equal(hook.selective, true);
+    assert.equal(hook.keysecondary.includes('奖学金'), true);
+});
+
+test('character card compiler embeds the same lorebook', () => {
+    const card = compileCharacterCard(sampleEvents(), null, { worldBookName: '槐青中学 世界书', embedBook: true });
+    assert.equal(card.spec, 'chara_card_v2');
+    assert.equal(card.data.name, '林知遥');
+    assert.equal(card.data.extensions.world, '槐青中学 世界书');
+    assert.equal(card.data.character_book.entries.length, 4);
+});
+
+test('trigger simulator distinguishes direct and recursive activation', () => {
+    const simulation = simulateLoreActivation(sampleEvents(), '奖学金材料提到听证会的维修报价。');
+    assert.equal(simulation.results.some(result => result.title.includes('学生听证会') && result.phase === 'direct'), true);
+    assert.equal(simulation.totalChars > 0, true);
+
+    const recursiveEvents = sampleEvents();
+    recursiveEvents[1].activation.mode = 'constant';
+    recursiveEvents[1].content += ' 陈砚舟负责整理本月资料。';
+    const recursive = simulateLoreActivation(recursiveEvents, '今天照常上课。');
+    assert.equal(recursive.results.some(result => result.title.includes('陈砚舟') && result.phase === 'recursive'), true);
+});
+
+test('custom length values remain writing constraints', () => {
+    const plan = resolveLengthPlan({
+        lengthPreset: 'custom',
+        customLength: {
+            characterChars: 2400,
+            entryCount: 31,
+            entryMinChars: 140,
+            entryMaxChars: 260,
+            importantEntryMaxChars: 480,
+            npcCount: 6,
+            relationCount: 8,
+        },
+    });
+    assert.deepEqual(plan.entries, [31, 31]);
+    assert.deepEqual(plan.npcs, [6, 6]);
+    assert.equal(plan.importantEntryMaxChars, 480);
+});
+
+test('length scanner catches oversized character cards', () => {
+    const events = sampleEvents();
+    events[2].description = '很长的角色描述。'.repeat(500);
+    const issues = findLengthIssues(events, {
+        character: [600, 1000],
+        entryChars: [80, 160],
+        importantEntryMaxChars: 300,
+    });
+    assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'description'), true);
+});
