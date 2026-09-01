@@ -1131,6 +1131,17 @@ function preserveInterruptedProject(error, controller) {
     notify('error', String(error?.message || error));
 }
 
+function exposeContinuationImmediately() {
+    state.events = state.events.filter(event => event.type !== 'done');
+    state.raw = serializeJsonl(state.events);
+    state.complete = false;
+    state.canContinue = true;
+    persistDraft();
+    refreshResults();
+    setStatus(`已停止并保留 ${state.events.length} 个完整事件，可以立即继续生成。`, 'warning');
+    setGenerating(false);
+}
+
 async function generateProject() {
     if (state.generating || state.greetingGenerating) return;
     const options = collectOptions();
@@ -1149,14 +1160,16 @@ async function generateProject() {
         const references = await buildReferences(options);
         const systemPrompt = buildSystemPrompt();
         const prompt = buildGenerationPrompt(options, references);
-        state.parser = new JsonlStreamParser({
+        const parser = new JsonlStreamParser({
             onEvent: event => {
+                if (state.abortController !== controller) return;
                 state.events.push(event);
                 state.selectedId ||= event.id;
                 refreshResults({ preserveEditor: true });
             },
             onError: detail => console.warn(`[${DISPLAY_NAME}] JSONL 第 ${detail.lineNumber} 行暂时无法解析`, detail.message),
         });
+        state.parser = parser;
         setStatus('正在连接当前酒馆模型', 'working');
         const result = await generateWithFallback(getContext(), {
             systemPrompt,
@@ -1164,8 +1177,9 @@ async function generateProject() {
             preferStream: options.stream,
             signal: controller.signal,
             onText: (text, meta) => {
+                if (state.abortController !== controller) return;
                 state.raw = text;
-                state.parser.pushCumulative(text);
+                parser.pushCumulative(text);
                 const rawBox = state.overlay.querySelector('#gwf-raw');
                 if (rawBox) {
                     rawBox.value = text;
@@ -1174,10 +1188,12 @@ async function generateProject() {
                 setStatus(`正在接收：${state.events.length} 个完整事件，${meta.length || text.length} 字符`, 'working');
             },
             onStatus: meta => {
+                if (state.abortController !== controller) return;
                 if (meta.phase === 'fallback') setStatus(`流式连接未完成，已切换普通生成：${meta.reason}`, 'working');
             },
         });
-        let parsed = state.parser.finish(result.text);
+        if (state.abortController !== controller) throw controller.signal.reason || new DOMException('已停止生成', 'AbortError');
+        let parsed = parser.finish(result.text);
         state.events = parsed.events;
         state.raw = parsed.raw;
         if (parsed.errors.length) {
@@ -1187,11 +1203,13 @@ async function generateProject() {
         }
         await finalizeProjectEvents(options, plan);
     } catch (error) {
-        preserveInterruptedProject(error, controller);
+        if (state.abortController === controller) preserveInterruptedProject(error, controller);
     } finally {
-        if (state.abortController === controller) state.abortController = null;
-        state.parser = null;
-        setGenerating(false);
+        if (state.abortController === controller) {
+            state.abortController = null;
+            state.parser = null;
+            setGenerating(false);
+        }
     }
 }
 
@@ -1212,8 +1230,9 @@ async function continueProject() {
         setStatus(`正在从 ${baseEvents.length} 个完整事件继续`, 'working');
         const references = await buildReferences(options);
         const prompt = buildContinuationPrompt(options, references, baseEvents);
-        state.parser = new JsonlStreamParser({
+        const parser = new JsonlStreamParser({
             onEvent: event => {
+                if (state.abortController !== controller) return;
                 continuedEvents.push(event);
                 state.events = mergeContinuationEvents(baseEvents, continuedEvents);
                 state.selectedId ||= event.id;
@@ -1221,13 +1240,15 @@ async function continueProject() {
             },
             onError: detail => console.warn(`[${DISPLAY_NAME}] 续写 JSONL 第 ${detail.lineNumber} 行暂时无法解析`, detail.message),
         });
+        state.parser = parser;
         const result = await generateWithFallback(getContext(), {
             systemPrompt: buildSystemPrompt(),
             prompt,
             preferStream: options.stream,
             signal: controller.signal,
             onText: (text, meta) => {
-                state.parser.pushCumulative(text);
+                if (state.abortController !== controller) return;
+                parser.pushCumulative(text);
                 state.raw = [baseRaw, text].filter(Boolean).join('\n');
                 const rawBox = state.overlay.querySelector('#gwf-raw');
                 if (rawBox) {
@@ -1237,10 +1258,12 @@ async function continueProject() {
                 setStatus(`正在继续：新增 ${continuedEvents.length} 个完整事件，${meta.length || text.length} 字符`, 'working');
             },
             onStatus: meta => {
+                if (state.abortController !== controller) return;
                 if (meta.phase === 'fallback') setStatus(`续写流式连接未完成，已切换普通生成：${meta.reason}`, 'working');
             },
         });
-        let parsed = state.parser.finish(result.text);
+        if (state.abortController !== controller) throw controller.signal.reason || new DOMException('已停止生成', 'AbortError');
+        let parsed = parser.finish(result.text);
         if (parsed.errors.length) {
             const repaired = await repairMalformedJsonl(parsed.raw, options);
             parsed = { ...parsed, events: repaired.events, raw: repaired.raw, errors: [] };
@@ -1249,11 +1272,13 @@ async function continueProject() {
         state.raw = serializeJsonl(state.events);
         await finalizeProjectEvents(options, plan);
     } catch (error) {
-        preserveInterruptedProject(error, controller);
+        if (state.abortController === controller) preserveInterruptedProject(error, controller);
     } finally {
-        if (state.abortController === controller) state.abortController = null;
-        state.parser = null;
-        setGenerating(false);
+        if (state.abortController === controller) {
+            state.abortController = null;
+            state.parser = null;
+            setGenerating(false);
+        }
     }
 }
 
@@ -1402,7 +1427,15 @@ function stopGreetingGeneration() {
 }
 
 function stopGeneration() {
-    state.abortController?.abort(new DOMException('用户停止生成', 'AbortError'));
+    const controller = state.abortController;
+    if (controller && state.generating) {
+        controller.abort(new DOMException('用户停止生成', 'AbortError'));
+        if (state.abortController === controller) {
+            state.abortController = null;
+            state.parser = null;
+            exposeContinuationImmediately();
+        }
+    }
     stopGreetingGeneration();
     try { getContext().stopGeneration?.(); } catch { /* host fallback */ }
 }
