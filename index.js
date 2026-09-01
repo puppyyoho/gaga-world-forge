@@ -244,6 +244,7 @@ function createOverlay() {
     const overlay = document.createElement('div');
     overlay.id = 'gwf-overlay';
     overlay.className = 'gwf-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = `
         <div class="gwf-shell" role="dialog" aria-modal="true" aria-label="${DISPLAY_NAME}">
             <header class="gwf-header" title="拖动窗口，双击复位">
@@ -259,14 +260,14 @@ function createOverlay() {
                         </select>
                     </label>
                     <span class="gwf-version">v${VERSION}</span>
-                    <button id="gwf-close" class="menu_button gwf-icon-button" type="button" title="关闭" aria-label="关闭世界与角色工坊">×</button>
+                    <button id="gwf-close" class="menu_button gwf-icon-button" type="button" title="隐藏面板，生成会继续" aria-label="隐藏世界与角色工坊，生成任务继续运行">×</button>
                 </div>
             </header>
             <div class="gwf-workspace">
                 <aside class="gwf-compose">
                     <section class="gwf-section gwf-hero-section">
-                        <label for="gwf-brief" class="gwf-label">你想创作什么？</label>
-                        <textarea id="gwf-brief" rows="7" placeholder="例如：现代校园背景。主角色是奖学金生，和家境优越的同桌从互相防备开始熟悉。希望阶层差异真正影响日常选择，NPC都有自己的生活。"></textarea>
+                        <label for="gwf-brief" class="gwf-label">你想创作谁，以及怎样的故事？</label>
+                        <textarea id="gwf-brief" rows="7" placeholder="例如：主角色是现代校园里的奖学金生，习惯用玩笑遮掩窘迫，被质疑时先算清后果再回应。请细写他的生活方式、语言、关系边界与压力反应。家庭经济和同桌的优越家境会持续影响日常选择。"></textarea>
                         <input id="gwf-project-name" type="text" maxlength="100" placeholder="项目名，可留空让模型命名">
                     </section>
 
@@ -312,7 +313,7 @@ function createOverlay() {
                         </select></label>
                         <div id="gwf-length-hint" class="gwf-hint"></div>
                         <div id="gwf-custom-length" class="gwf-custom-grid" hidden>
-                            <label>角色卡目标字数<input id="gwf-custom-character" type="number" min="300" max="12000" value="1600"></label>
+                            <label>角色卡目标字数<input id="gwf-custom-character" type="number" min="300" max="12000" value="2400"></label>
                             <label>世界书条目数<input id="gwf-custom-entry-count" type="number" min="3" max="150" value="22"></label>
                             <label>普通条目最少字数<input id="gwf-custom-entry-min" type="number" min="40" max="1200" value="120"></label>
                             <label>普通条目最多字数<input id="gwf-custom-entry-max" type="number" min="60" max="2000" value="240"></label>
@@ -372,8 +373,8 @@ function createOverlay() {
                     </div>
                     <div id="gwf-empty" class="gwf-empty">
                         <div class="gwf-orbit">界</div>
-                        <h3>世界还在等待第一句话</h3>
-                        <p>生成时，世界、角色、NPC和关系会逐项出现在这里。</p>
+                        <h3>角色还在等待第一句话</h3>
+                        <p>生成时，人物核心、关系、世界与NPC会逐项出现在这里。</p>
                     </div>
                     <div id="gwf-blueprint-view" class="gwf-blueprint-view" hidden>
                         <nav id="gwf-event-list" class="gwf-event-list"></nav>
@@ -428,19 +429,23 @@ function createOverlay() {
 function openStudio() {
     const overlay = createOverlay();
     overlay.classList.add('is-open');
+    overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('gwf-modal-open');
+    updateFabActivity();
+    refreshResults({ preserveEditor: true });
     ensureStudioVisible();
     const shell = overlay.querySelector('.gwf-shell');
     if (shell) keepShellInViewport(overlay, shell);
 }
 
 function closeStudio() {
-    if (state.generating) {
-        notify('warning', '请先停止当前生成。');
-        return;
-    }
     state.overlay?.classList.remove('is-open');
+    state.overlay?.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('gwf-modal-open');
+    updateFabActivity();
+    if (state.generating || state.greetingGenerating) {
+        notify('info', '面板已隐藏，生成继续进行。点击粉色狗狗图标可以返回查看进度。');
+    }
 }
 
 function applyShellOffset(shell) {
@@ -733,7 +738,19 @@ function bindFabDrag(fab) {
 
 function updateFab() {
     const fab = document.querySelector('#gwf-fab');
-    if (fab) fab.hidden = settings().showFloatingButton === false;
+    if (!fab) return;
+    const active = state.generating || state.greetingGenerating;
+    fab.hidden = settings().showFloatingButton === false && !active;
+    updateFabActivity();
+}
+
+function updateFabActivity() {
+    const fab = document.querySelector('#gwf-fab');
+    if (!fab) return;
+    const active = state.generating || state.greetingGenerating;
+    fab.classList.toggle('is-generating', active);
+    fab.title = active ? '正在后台生成，点击返回工坊' : '点击打开工坊，拖动调整位置';
+    fab.setAttribute('aria-label', active ? `返回${DISPLAY_NAME}查看生成进度` : `打开${DISPLAY_NAME}`);
 }
 
 function applyTheme(theme) {
@@ -759,6 +776,7 @@ function setGenerating(value) {
     const stop = state.overlay?.querySelector('#gwf-stop');
     if (generate) generate.disabled = value;
     if (stop) stop.hidden = !value;
+    updateFab();
 }
 
 function selectedValues(selector) {
@@ -786,7 +804,7 @@ function collectOptions() {
         activationStrategy: state.overlay.querySelector('#gwf-activation-strategy')?.value,
         greetingSlots: collectGreetingSlotsFromForm(),
         customLength: {
-            characterChars: numberValue('#gwf-custom-character', 1600),
+            characterChars: numberValue('#gwf-custom-character', 2400),
             entryCount: numberValue('#gwf-custom-entry-count', 22),
             entryMinChars: numberValue('#gwf-custom-entry-min', 120),
             entryMaxChars: numberValue('#gwf-custom-entry-max', 240),
@@ -1129,8 +1147,8 @@ async function generateProject() {
         state.selectedId ||= state.events[0]?.id || '';
         persistDraft();
         refreshResults();
-        setStatus(`创作完成：${aggregateBlueprint(state.events).loreEvents.length} 个世界书条目`, 'success');
-        notify('success', '世界蓝图、角色卡和世界书已经生成。');
+        setStatus(`角色卡已完成，附带 ${aggregateBlueprint(state.events).loreEvents.length} 个世界书条目`, 'success');
+        notify('success', '角色卡、关系资料和世界书已经生成。');
     } catch (error) {
         if (state.abortController?.signal.aborted || error?.name === 'AbortError') {
             setStatus(`已停止。保留 ${state.events.length} 个草稿事件，未写入酒馆。`, 'warning');
@@ -1161,6 +1179,7 @@ function setGreetingGenerating(value) {
     const stop = state.overlay?.querySelector('#gwf-stop-greetings');
     if (generate) generate.disabled = value || !state.complete;
     if (stop) stop.hidden = !value;
+    updateFab();
 }
 
 function normalizeGreetingEvents(events, slots = []) {

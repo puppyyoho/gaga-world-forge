@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildGreetingPrompt, buildGreetingSystemPrompt, normalizeOptions, resolveLengthPlan } from '../studio-data.js';
+import {
+    buildGenerationPrompt,
+    buildGreetingPrompt,
+    buildGreetingSystemPrompt,
+    buildSystemPrompt,
+    normalizeOptions,
+    resolveLengthPlan,
+} from '../studio-data.js';
 import {
     JsonlStreamParser,
     aggregateBlueprint,
@@ -205,6 +212,20 @@ test('greeting prompt includes the requested count, styles, and user settings', 
     assert.equal((prompt.match(/雷蒙德・卡佛/gu) || []).length, 1);
 });
 
+test('project prompt and automatic length plan prioritize the main character', () => {
+    const systemPrompt = buildSystemPrompt();
+    const generationPrompt = buildGenerationPrompt({
+        brief: '创作一名在校园里隐瞒家庭压力的主角色。',
+    });
+    const plan = resolveLengthPlan({ lengthPreset: 'auto' });
+    assert.match(systemPrompt, /主角色是项目的叙事核心/u);
+    assert.match(systemPrompt, /description 是完整人物剖析/u);
+    assert.match(systemPrompt, /exampleDialogue 至少覆盖日常交流/u);
+    assert.match(generationPrompt, /主角色卡达到目标密度后再扩展NPC与世界书条目/u);
+    assert.ok(plan.character[0] >= 2000);
+    assert.ok(plan.entries[1] <= 35);
+});
+
 test('greeting task cards keep independent requirements and output slots', () => {
     const options = normalizeOptions({
         greetingSlots: [
@@ -388,4 +409,17 @@ test('length scanner catches oversized character cards', () => {
         importantEntryMaxChars: 300,
     });
     assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'description'), true);
+});
+
+test('length scanner requests deeper character fields when the card is too thin', () => {
+    const events = sampleEvents();
+    const issues = findLengthIssues(events, {
+        character: [2400, 3600],
+        entryChars: [80, 260],
+        importantEntryMaxChars: 420,
+    });
+    assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'description' && /明显低于/u.test(issue.reason)), true);
+    assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'personality'), true);
+    assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'scenario'), true);
+    assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'exampleDialogue'), true);
 });

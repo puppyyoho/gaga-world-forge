@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Puppy Yoho",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "homePage": "https://github.com/puppyyoho/gaga-world-forge",
   "license": "All Rights Reserved",
   "auto_update": true,

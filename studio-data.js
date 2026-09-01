@@ -1,7 +1,7 @@
 export const EXTENSION_NAME = 'gaga-world-forge';
 export const DISPLAY_NAME = '嘎嘎世界与角色工坊';
 export const SETTINGS_KEY = 'gagaWorldForge';
-export const VERSION = '0.2.1';
+export const VERSION = '0.2.2';
 
 export const THEME_OPTIONS = [
     { id: 'twilight', label: '暮色紫粉', shortLabel: '紫粉' },
@@ -302,6 +302,19 @@ export const CLASS_PRESETS = [
 
 export const MODULE_GROUPS = [
     {
+        id: 'people',
+        label: '人物内容',
+        modules: [
+            { id: 'mainCharacter', label: '主角色卡', default: true, locked: true },
+            { id: 'npcs', label: 'NPC群像', default: true },
+            { id: 'relations', label: '关系网络', default: true },
+            { id: 'behavior', label: '行为习惯', default: true },
+            { id: 'emotion', label: '情感与状态', default: true },
+            { id: 'speech', label: '语言指纹', default: true },
+            { id: 'userPersona', label: 'User 人设' },
+        ],
+    },
+    {
         id: 'world',
         label: '世界内容',
         modules: [
@@ -315,19 +328,6 @@ export const MODULE_GROUPS = [
             { id: 'systems', label: '魔法科技体系' },
             { id: 'terminology', label: '术语与专名' },
             { id: 'items', label: '物品与资产' },
-        ],
-    },
-    {
-        id: 'people',
-        label: '人物内容',
-        modules: [
-            { id: 'mainCharacter', label: '主角色卡', default: true, locked: true },
-            { id: 'npcs', label: 'NPC群像', default: true },
-            { id: 'relations', label: '关系网络', default: true },
-            { id: 'behavior', label: '行为习惯', default: true },
-            { id: 'emotion', label: '情感与状态', default: true },
-            { id: 'speech', label: '语言指纹', default: true },
-            { id: 'userPersona', label: 'User 人设' },
         ],
     },
     {
@@ -360,10 +360,10 @@ export const MODULE_GROUPS = [
 
 export const LENGTH_PRESETS = {
     auto: { label: '自动分配' },
-    concise: { label: '精简', character: [600, 1000], entries: [8, 12], entryChars: [80, 160], npcs: [1, 2] },
-    standard: { label: '标准', character: [1200, 2000], entries: [15, 25], entryChars: [120, 220], npcs: [3, 5] },
-    detailed: { label: '详细', character: [2200, 3500], entries: [30, 45], entryChars: [150, 280], npcs: [5, 8] },
-    extensive: { label: '超详细', character: [3500, 6000], entries: [50, 80], entryChars: [180, 350], npcs: [8, 15] },
+    concise: { label: '精简', character: [900, 1400], entries: [6, 10], entryChars: [80, 150], npcs: [1, 2] },
+    standard: { label: '标准', character: [1800, 2800], entries: [12, 20], entryChars: [110, 210], npcs: [3, 5] },
+    detailed: { label: '详细', character: [3200, 4800], entries: [24, 36], entryChars: [140, 260], npcs: [5, 8] },
+    extensive: { label: '超详细', character: [5000, 8000], entries: [38, 60], entryChars: [170, 320], npcs: [8, 15] },
     custom: { label: '自定义' },
 };
 
@@ -376,8 +376,8 @@ export const SECTION_LENGTH_OPTIONS = [
 ];
 
 export const SECTION_LENGTH_GROUPS = [
-    { id: 'world', label: '世界设定' },
     { id: 'character', label: '主角色卡' },
+    { id: 'world', label: '世界设定' },
     { id: 'npc', label: 'NPC' },
     { id: 'relation', label: '关系' },
     { id: 'behavior', label: '行为习惯' },
@@ -415,7 +415,7 @@ export function createDefaultOptions() {
         modules: createDefaultModules(),
         lengthPreset: 'auto',
         customLength: {
-            characterChars: 1600,
+            characterChars: 2400,
             entryCount: 22,
             entryMinChars: 120,
             entryMaxChars: 240,
@@ -575,13 +575,13 @@ export function resolveLengthPlan(rawOptions) {
 
     const selectedCount = Object.values(options.modules).filter(Boolean).length;
     const complexity = selectedCount + options.worldPresets.length + options.tonePresets.length;
-    const entryTarget = Math.min(42, Math.max(12, 10 + Math.round(complexity * 0.9) + options.npcCount + Math.ceil(options.relationCount / 2)));
+    const entryTarget = Math.min(32, Math.max(10, 8 + Math.round(complexity * 0.55) + options.npcCount + Math.ceil(options.relationCount / 3)));
     return {
         mode: 'auto',
-        character: complexity > 18 ? [1800, 2800] : [1200, 2100],
-        entries: [Math.max(8, entryTarget - 4), entryTarget + 4],
-        entryChars: complexity > 18 ? [130, 260] : [100, 220],
-        importantEntryMaxChars: complexity > 18 ? 500 : 420,
+        character: complexity > 18 ? [3000, 4600] : [2000, 3400],
+        entries: [Math.max(8, entryTarget - 3), entryTarget + 3],
+        entryChars: complexity > 18 ? [130, 250] : [100, 210],
+        importantEntryMaxChars: complexity > 18 ? 480 : 400,
         npcs: options.modules.npcs ? [options.npcCount, options.npcCount] : [0, 0],
         relations: options.modules.relations ? [options.relationCount, options.relationCount] : [0, 0],
     };
@@ -657,14 +657,14 @@ export function outputSchemaExamples() {
             role: 'main',
             name: '姓名',
             aliases: [],
-            description: '角色卡描述',
-            personality: '性格与行为逻辑',
-            scenario: '当前处境与可持续场景',
+            description: '完整角色剖析，包括生存逻辑、生活切面、社会面具、内在矛盾、情感表达、关系方式、习惯与边界',
+            personality: '可直接执行的行为逻辑，包括日常决策、压力反应、语言指纹与分场景反应模式',
+            scenario: '角色当前生活结构、持续压力、与用户的关系入口及可以反复运转的互动场景',
             firstMessage: '自然开场白',
-            exampleDialogue: '<START>\n{{user}}: 示例\n{{char}}: 示例',
-            systemPrompt: '',
-            postHistoryInstructions: '',
-            creatorNotes: '作者备注',
+            exampleDialogue: '<START>\n{{user}}: 日常情境示例\n{{char}}: 展现语言指纹与动作习惯\n<START>\n{{user}}: 压力情境示例\n{{char}}: 展现应激反应与关系边界',
+            systemPrompt: '简短的角色扮演核心规则',
+            postHistoryInstructions: '维持人物行为逻辑、主动性与用户选择空间的简短约束',
+            creatorNotes: '人物使用说明、关系发展方向与重要提醒',
             alternateGreetings: [],
             tags: [],
         },
@@ -698,8 +698,15 @@ export function outputSchemaExamples() {
 
 export function buildSystemPrompt() {
     const schemas = outputSchemaExamples();
-    return `你是中文互动叙事的世界构筑师、角色设计师和资料编辑器。
-你的任务是把用户的自由要求、所选创作预设和参考资料整理成适合长期角色扮演的统一世界蓝图。程序会把蓝图编译成 SillyTavern 角色卡和世界书。
+    return `你是中文互动叙事的角色设计师、世界构筑师和资料编辑器。
+你的任务是把用户的自由要求、所选创作预设和参考资料整理成适合长期角色扮演的完整角色与统一世界蓝图。程序会把蓝图编译成 SillyTavern 角色卡和世界书。
+
+【创作重心】
+1. 主角色是项目的叙事核心。先完成能够独立支撑长期扮演的完整人物，再构筑影响其生活与关系的世界资料。
+2. 角色卡需要独立成立。模型只读取角色卡时，也能准确把握人物怎样生活、怎样判断、怎样说话、怎样处理关系，以及在不同压力下怎样行动。
+3. 世界设定围绕人物产生实际作用。每项制度、地点、组织、阶层或历史资料都要回答它如何改变角色的资源、风险、日程、选择或关系。
+4. 主角色的稳定核心优先写入 character 事件。世界书中的行为、情感、语言和状态条目用于补充条件反应与动态变化，避免用大量背景条目代替角色卡本体。
+5. 分配创作篇幅时优先保证主角色达到长度目标。世界书控制在所选数量与密度内，保留最能支持人物行动和剧情推进的资料。
 
 【资料优先级】
 1. 用户明确锁定的要求拥有最高优先级，不得擅自修改。
@@ -723,6 +730,17 @@ export function buildSystemPrompt() {
 5. 重要NPC拥有独立的生计、麻烦、社交圈、短期目标和长期执念。其行动优先服务自身诉求，主角只是其生活中的变量之一。
 6. 人物拥有分层社会面具。面对上位者、同辈、下位者、生人和亲近者时，用词、语气、肢体距离与暴露程度应有可追溯的变化。
 7. 饮食、作息、消费、穿搭和居住环境需要匹配收入、职业与生活背景。
+8. 主角色需要呈现多个相互连贯的生活切面，包括独处、日常社交、利益受损、遭到质疑、计划落空、关系靠近和边界受压时的具体表现。所选模块决定可用场景范围。
+9. 写清人物的情感运作方式，包括怎样察觉情绪、怎样掩饰或表达、怎样寻求安慰、怎样处理羞耻与亏欠、怎样记住善意与冒犯。用动作、措辞和选择承载这些内容。
+10. 写清人物的主动性。人物拥有自己的日程、待办、关系和麻烦，会主动联系、拒绝、隐瞒、试探、求助或推进计划，同时给用户保留回应与选择空间。
+
+【主角色卡字段分工】
+1. description 是完整人物剖析。依次写清身份与外在印象、生存逻辑、资源与限制、生活切面、经历形成的判断方式、社会面具、内在矛盾、情感表达、关系模式、身体习惯、生活习惯和边界。使用连贯自然的段落。
+2. personality 是可执行的扮演逻辑。用具体情境、第一反应、后续策略、语言变化和行为边界组成反应模式。避免罗列形容词，避免重复 description 的传记事实。
+3. scenario 写角色当下真实在过的生活，包括日程、持续压力、尚未解决的目标、与用户的当前关系入口、常见互动地点和能够自然循环或变化的事件来源。
+4. exampleDialogue 至少覆盖日常交流、受到质疑、利益或关系发生冲突三类情境。每组对话都同时展示专属用词、句式节奏、称呼、微动作和隐藏意图。
+5. systemPrompt 与 postHistoryInstructions 保持简短，分别锚定扮演核心和长期一致性。creatorNotes 说明人物的使用方式、关系发展空间与需要避免的扁平化倾向。
+6. firstMessage 与 alternateGreetings 负责把人物投入可互动场景。角色主动做事和说话，结尾给用户留下明确而开放的回应空间。
 
 【关系设计】
 1. 每段关系用互动模式定义，包含相处节奏、默认分工、常聊话题、玩笑方式、潜规则和雷区。
@@ -793,6 +811,7 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
     const plan = resolveLengthPlan(options);
     const lines = [
         '请根据以下创作委托生成完整项目。',
+        '先确定主角色的生存逻辑、行为模式和关系方式，再选择真正影响人物生活的世界资料。主角色卡达到目标密度后再扩展NPC与世界书条目。',
         '',
         '【用户自由要求】',
         options.brief || '用户没有填写详细要求。请根据已选预设创作一个适合长期互动的完整项目。',
@@ -809,6 +828,7 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
         '',
         '【选中的内容模块】',
         selectedModuleLabels(options).join('、'),
+        '人物模块需要先落实到主角色卡。行为习惯写入可执行反应模式，情感状态写入情绪处理与关系表达，语言指纹写入专属措辞、节奏、称呼和不同压力下的变化。对应世界书条目只补充条件细节与动态状态。',
         '',
         '【长度约束】',
         lengthInstruction(plan),

@@ -289,7 +289,32 @@ export function findLengthIssues(events, plan) {
     const characterFields = ['description', 'personality', 'scenario', 'firstMessage', 'exampleDialogue', 'systemPrompt', 'postHistoryInstructions', 'creatorNotes'];
     for (const event of events.filter(item => item.type === 'character' && item.role !== 'user')) {
         const total = characterFields.reduce((sum, key) => sum + String(event[key] || '').length, 0);
+        const min = plan.character[0];
         const max = plan.character[1];
+        if (total < Math.round(min * 0.78)) {
+            const expansionTargets = {
+                description: Math.round(min * 0.42),
+                personality: Math.round(min * 0.19),
+                scenario: Math.round(min * 0.12),
+                exampleDialogue: Math.round(min * 0.12),
+            };
+            for (const [key, target] of Object.entries(expansionTargets)) {
+                const length = String(event[key] || '').length;
+                if (length >= Math.round(target * 0.8)) continue;
+                const focus = key === 'description'
+                    ? '补足生存逻辑、生活切面、社会面具、内在矛盾、情感表达、关系方式、习惯与边界'
+                    : key === 'personality'
+                        ? '补足日常决策、压力反应、语言变化与行为边界'
+                        : key === 'scenario'
+                            ? '补足日程、持续压力、关系入口与可循环事件'
+                            : '补足日常、受质疑和冲突情境中的语言指纹与动作反应';
+                issues.push({
+                    id: event.id,
+                    path: key,
+                    reason: `角色卡正文合计约 ${total} 字，明显低于 ${min} 字目标。请将本字段扩写至约 ${target} 字，${focus}`,
+                });
+            }
+        }
         if (total > Math.max(max + 300, Math.round(max * 1.3))) {
             const ratio = max / total;
             for (const key of characterFields) {
