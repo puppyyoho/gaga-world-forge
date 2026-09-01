@@ -205,7 +205,9 @@ export async function generateWithFallback(ctx, options) {
         }
     }
     if (typeof ctx?.generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供可用的生成接口');
+    if (options.signal?.aborted) throw options.signal.reason || new DOMException('已停止生成', 'AbortError');
     const text = await ctx.generateRaw({ systemPrompt: options.systemPrompt, prompt: options.prompt });
+    if (options.signal?.aborted) throw options.signal.reason || new DOMException('已停止生成', 'AbortError');
     const value = String(text || '');
     options.onText?.(value, { phase: 'received', source: '普通生成', chunks: 1, updates: 1, length: value.length });
     return { supported: true, streamed: false, buffered: true, text: value, source: '普通生成', chunks: 1, updates: 1 };

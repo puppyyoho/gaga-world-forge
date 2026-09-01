@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     buildGenerationPrompt,
+    buildContinuationPrompt,
     buildGreetingPrompt,
     buildGreetingSystemPrompt,
     buildSystemPrompt,
@@ -13,11 +14,13 @@ import {
     aggregateBlueprint,
     applyPatches,
     findStyleIssues,
+    mergeContinuationEvents,
     findLengthIssues,
     parsePatchJsonl,
     validateBlueprint,
 } from '../jsonl.js';
 import { compileCharacterCard, compileWorldBook, simulateLoreActivation } from '../compiler.js';
+import { generateWithFallback } from '../streaming.js';
 
 function sampleEvents() {
     return [
@@ -165,6 +168,25 @@ test('JSONL parser reports a truncated final object after local recovery', () =>
     assert.match(result.errors[0].message, /输出上限/);
 });
 
+test('buffered generation respects a stop signal before applying returned text', async () => {
+    const controller = new AbortController();
+    const context = {
+        generateRaw: async () => {
+            controller.abort(new DOMException('用户停止生成', 'AbortError'));
+            return '{"type":"project"}';
+        },
+    };
+    await assert.rejects(
+        generateWithFallback(context, {
+            systemPrompt: '',
+            prompt: 'test',
+            preferStream: false,
+            signal: controller.signal,
+        }),
+        error => error?.name === 'AbortError',
+    );
+});
+
 test('complete blueprint validates and aggregates', () => {
     const events = sampleEvents();
     const result = validateBlueprint(events);
@@ -226,6 +248,15 @@ test('project prompt and automatic length plan prioritize the main character', (
     assert.ok(plan.entries[1] <= 35);
 });
 
+test('continuation prompt locks completed events and requests only new JSONL', () => {
+    const completed = sampleEvents().slice(0, 3);
+    const prompt = buildContinuationPrompt({ brief: '继续校园人物项目。' }, {}, completed);
+    assert.match(prompt, /已经完成的事件数量/u);
+    assert.match(prompt, /character\.main/u);
+    assert.match(prompt, /只输出本次新增的 JSONL 事件/u);
+    assert.doesNotMatch(prompt, /"type":"done"/u);
+});
+
 test('greeting task cards keep independent requirements and output slots', () => {
     const options = normalizeOptions({
         greetingSlots: [
@@ -276,6 +307,60 @@ test('patch events update only requested paths', () => {
     assert.equal(updated[2].description, '新的完整描述');
     assert.equal(updated[2].name, '林知遥');
     assert.notEqual(updated, events);
+});
+
+test('continuation merge ignores duplicates and repairs final combined counts', () => {
+    const source = sampleEvents();
+    const existing = source.slice(0, 4);
+    const incoming = [
+        { ...source[1] },
+        { ...source[0], id: 'project.duplicate' },
+        { ...source[3], id: 'npc.second', title: '第二名同学' },
+        source[4],
+        source[5],
+        { type: 'done', id: 'done', counts: { project: 99 } },
+    ];
+    const merged = mergeContinuationEvents(existing, incoming);
+    assert.deepEqual(merged.map(event => event.id), [
+        'project.main',
+        'world.scholarship',
+        'character.main',
+        'npc.chen.base',
+        'npc.second',
+        'relation.lin_chen',
+        'lore.hearing',
+        'done',
+    ]);
+    assert.deepEqual(merged.at(-1).counts, {
+        project: 1,
+        world: 1,
+        character: 1,
+        npc: 2,
+        relation: 1,
+        lore: 1,
+    });
+});
+
+test('continuation merge can pause repeatedly and keeps singleton project and main character', () => {
+    const source = sampleEvents();
+    const firstResume = mergeContinuationEvents([source[0]], [
+        { ...source[0], id: 'project.second' },
+        source[1],
+        source[2],
+    ]);
+    assert.equal(firstResume.some(event => event.type === 'done'), false);
+    assert.equal(firstResume.filter(event => event.type === 'project').length, 1);
+
+    const secondResume = mergeContinuationEvents(firstResume, [
+        { ...source[2], id: 'character.second' },
+        source[3],
+        source[4],
+        source[5],
+        source[6],
+    ]);
+    assert.equal(secondResume.filter(event => event.type === 'character' && event.role === 'main').length, 1);
+    assert.equal(secondResume.at(-1).type, 'done');
+    assert.equal(validateBlueprint(secondResume).valid, true);
 });
 
 test('worldbook compiler creates deterministic native entries', () => {

@@ -349,6 +349,52 @@ function countTypes(events) {
     }, {});
 }
 
+export function mergeContinuationEvents(existingEvents, incomingEvents) {
+    const merged = [];
+    const ids = new Set();
+    let hasProject = false;
+    let hasMainCharacter = false;
+    let lastOrder = -1;
+    for (const event of asArray(existingEvents)) {
+        if (!isObject(event) || event.type === 'done' || ids.has(event.id)) continue;
+        const order = EVENT_INDEX.get(event.type);
+        if (!Number.isInteger(order)) continue;
+        merged.push(event);
+        ids.add(event.id);
+        if (event.type === 'project') hasProject = true;
+        if (event.type === 'character' && event.role === 'main') hasMainCharacter = true;
+        lastOrder = Math.max(lastOrder, order);
+    }
+
+    let receivedDone = false;
+    for (const event of asArray(incomingEvents)) {
+        if (!isObject(event)) continue;
+        if (event.type === 'done') {
+            receivedDone = true;
+            continue;
+        }
+        const order = EVENT_INDEX.get(event.type);
+        if (!Number.isInteger(order) || order < lastOrder || ids.has(event.id)) continue;
+        if (event.type === 'project' && hasProject) continue;
+        if (event.type === 'character' && event.role === 'main' && hasMainCharacter) continue;
+        merged.push(event);
+        ids.add(event.id);
+        if (event.type === 'project') hasProject = true;
+        if (event.type === 'character' && event.role === 'main') hasMainCharacter = true;
+        lastOrder = Math.max(lastOrder, order);
+    }
+
+    if (receivedDone) {
+        const actual = countTypes(merged);
+        merged.push({
+            type: 'done',
+            id: 'done',
+            counts: Object.fromEntries(EVENT_ORDER.filter(type => type !== 'done').map(type => [type, actual[type] || 0])),
+        });
+    }
+    return merged;
+}
+
 export function validateBlueprint(events, { requireDone = true } = {}) {
     const errors = [];
     const warnings = [];

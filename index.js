@@ -20,6 +20,7 @@ import {
     TONE_PRESETS,
     VERSION,
     WORLD_PRESETS,
+    buildContinuationPrompt,
     buildGenerationPrompt,
     buildGreetingPrompt,
     buildGreetingSystemPrompt,
@@ -36,6 +37,7 @@ import {
     applyPatches,
     findLengthIssues,
     findStyleIssues,
+    mergeContinuationEvents,
     parsePatchJsonl,
     validateBlueprint,
 } from './jsonl.js';
@@ -57,6 +59,7 @@ const state = {
     activeTab: 'blueprint',
     generating: false,
     complete: false,
+    canContinue: false,
     abortController: null,
     parser: null,
     greetingGenerating: false,
@@ -357,6 +360,7 @@ function createOverlay() {
                     <div class="gwf-generation-bar">
                         <label class="gwf-check gwf-stream-toggle"><input id="gwf-stream" type="checkbox" checked><span>流式生成</span></label>
                         <button id="gwf-generate" class="menu_button gwf-primary" type="button">开始创作</button>
+                        <button id="gwf-continue" class="menu_button gwf-primary" type="button" hidden>继续生成</button>
                         <button id="gwf-stop" class="menu_button gwf-danger" type="button" hidden>停止</button>
                     </div>
                     <div id="gwf-status" class="gwf-status">等待创作要求</div>
@@ -419,10 +423,12 @@ function createOverlay() {
     if (Array.isArray(draft) && draft.length) {
         state.events = draft;
         state.complete = validateBlueprint(draft).valid;
+        state.canContinue = !state.complete;
         state.selectedId = draft[0]?.id || '';
         refreshResults();
         setStatus('已恢复上次草稿');
     }
+    setGenerating(false);
     return overlay;
 }
 
@@ -773,8 +779,16 @@ function setStatus(message, tone = '') {
 function setGenerating(value) {
     state.generating = value;
     const generate = state.overlay?.querySelector('#gwf-generate');
+    const resume = state.overlay?.querySelector('#gwf-continue');
     const stop = state.overlay?.querySelector('#gwf-stop');
-    if (generate) generate.disabled = value;
+    if (generate) {
+        generate.disabled = value;
+        generate.textContent = state.canContinue ? '重新开始' : '开始创作';
+    }
+    if (resume) {
+        resume.hidden = value || !state.canContinue;
+        resume.disabled = value;
+    }
     if (stop) stop.hidden = !value;
     updateFab();
 }
@@ -964,6 +978,7 @@ function resetGeneration() {
     state.raw = '';
     state.selectedId = '';
     state.complete = false;
+    state.canContinue = false;
     state.greetingGenerating = false;
     state.greetingAbortController = null;
     state.greetingParser = null;
@@ -1072,6 +1087,50 @@ function applyProjectCompileSettings(events, options) {
     };
 }
 
+async function finalizeProjectEvents(options, plan) {
+    state.events = filterUnselectedEvents(state.events, options);
+    let baseValidation = validateBlueprint(state.events);
+    if (!baseValidation.valid) {
+        const repaired = await repairInvalidBlueprint(state.events, baseValidation.errors);
+        state.events = filterUnselectedEvents(repaired.events, options);
+        state.raw = repaired.raw;
+        baseValidation = validateBlueprint(state.events);
+        if (!baseValidation.valid) throw new Error(baseValidation.errors.join('；'));
+    }
+    applyProjectCompileSettings(state.events, options);
+    let issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
+    if (issues.length) {
+        state.events = await repairContentIssues(state.events, issues);
+        issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
+        if (issues.length) throw new Error(`自动修复后仍有 ${issues.length} 个文风或长度问题，请在编辑区手动调整`);
+    }
+
+    state.complete = true;
+    state.canContinue = false;
+    state.raw = serializeJsonl(state.events);
+    state.selectedId ||= state.events[0]?.id || '';
+    persistDraft();
+    refreshResults();
+    setStatus(`角色卡已完成，附带 ${aggregateBlueprint(state.events).loreEvents.length} 个世界书条目`, 'success');
+    notify('success', '角色卡、关系资料和世界书已经生成。');
+}
+
+function preserveInterruptedProject(error, controller) {
+    state.events = state.events.filter(event => event.type !== 'done');
+    state.raw = serializeJsonl(state.events);
+    state.complete = false;
+    state.canContinue = true;
+    persistDraft();
+    refreshResults();
+    if (controller.signal.aborted || error?.name === 'AbortError') {
+        setStatus(`已停止并保留 ${state.events.length} 个完整事件，可以继续生成。`, 'warning');
+        return;
+    }
+    console.error(`[${DISPLAY_NAME}] 生成失败`, error);
+    setStatus(`生成中断：${String(error?.message || error)}。可以尝试继续生成。`, 'error');
+    notify('error', String(error?.message || error));
+}
+
 async function generateProject() {
     if (state.generating || state.greetingGenerating) return;
     const options = collectOptions();
@@ -1082,7 +1141,8 @@ async function generateProject() {
     }
     resetGeneration();
     setGenerating(true);
-    state.abortController = new AbortController();
+    const controller = new AbortController();
+    state.abortController = controller;
     const plan = resolveLengthPlan(options);
     try {
         setStatus('正在整理参考资料', 'working');
@@ -1102,7 +1162,7 @@ async function generateProject() {
             systemPrompt,
             prompt,
             preferStream: options.stream,
-            signal: state.abortController.signal,
+            signal: controller.signal,
             onText: (text, meta) => {
                 state.raw = text;
                 state.parser.pushCumulative(text);
@@ -1125,42 +1185,73 @@ async function generateProject() {
             state.events = repaired.events;
             state.raw = repaired.raw;
         }
-        state.events = filterUnselectedEvents(state.events, options);
-
-        let baseValidation = validateBlueprint(state.events);
-        if (!baseValidation.valid) {
-            const repaired = await repairInvalidBlueprint(state.events, baseValidation.errors);
-            state.events = filterUnselectedEvents(repaired.events, options);
-            state.raw = repaired.raw;
-            baseValidation = validateBlueprint(state.events);
-            if (!baseValidation.valid) throw new Error(baseValidation.errors.join('；'));
-        }
-        applyProjectCompileSettings(state.events, options);
-        let issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
-        if (issues.length) {
-            state.events = await repairContentIssues(state.events, issues);
-            issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
-            if (issues.length) throw new Error(`自动修复后仍有 ${issues.length} 个文风或长度问题，请在编辑区手动调整`);
-        }
-
-        state.complete = true;
-        state.selectedId ||= state.events[0]?.id || '';
-        persistDraft();
-        refreshResults();
-        setStatus(`角色卡已完成，附带 ${aggregateBlueprint(state.events).loreEvents.length} 个世界书条目`, 'success');
-        notify('success', '角色卡、关系资料和世界书已经生成。');
+        await finalizeProjectEvents(options, plan);
     } catch (error) {
-        if (state.abortController?.signal.aborted || error?.name === 'AbortError') {
-            setStatus(`已停止。保留 ${state.events.length} 个草稿事件，未写入酒馆。`, 'warning');
-        } else {
-            console.error(`[${DISPLAY_NAME}] 生成失败`, error);
-            setStatus(`生成未完成：${String(error?.message || error)}`, 'error');
-            notify('error', String(error?.message || error));
-        }
-        state.complete = false;
-        refreshResults();
+        preserveInterruptedProject(error, controller);
     } finally {
-        state.abortController = null;
+        if (state.abortController === controller) state.abortController = null;
+        state.parser = null;
+        setGenerating(false);
+    }
+}
+
+async function continueProject() {
+    if (state.generating || state.greetingGenerating || !state.canContinue) return;
+    const options = collectOptions();
+    const plan = resolveLengthPlan(options);
+    const baseEvents = state.events.filter(event => event.type !== 'done');
+    const baseRaw = serializeJsonl(baseEvents);
+    const continuedEvents = [];
+    const controller = new AbortController();
+    state.events = baseEvents;
+    state.complete = false;
+    state.canContinue = false;
+    state.abortController = controller;
+    setGenerating(true);
+    try {
+        setStatus(`正在从 ${baseEvents.length} 个完整事件继续`, 'working');
+        const references = await buildReferences(options);
+        const prompt = buildContinuationPrompt(options, references, baseEvents);
+        state.parser = new JsonlStreamParser({
+            onEvent: event => {
+                continuedEvents.push(event);
+                state.events = mergeContinuationEvents(baseEvents, continuedEvents);
+                state.selectedId ||= event.id;
+                refreshResults({ preserveEditor: true });
+            },
+            onError: detail => console.warn(`[${DISPLAY_NAME}] 续写 JSONL 第 ${detail.lineNumber} 行暂时无法解析`, detail.message),
+        });
+        const result = await generateWithFallback(getContext(), {
+            systemPrompt: buildSystemPrompt(),
+            prompt,
+            preferStream: options.stream,
+            signal: controller.signal,
+            onText: (text, meta) => {
+                state.parser.pushCumulative(text);
+                state.raw = [baseRaw, text].filter(Boolean).join('\n');
+                const rawBox = state.overlay.querySelector('#gwf-raw');
+                if (rawBox) {
+                    rawBox.value = state.raw;
+                    rawBox.scrollTop = rawBox.scrollHeight;
+                }
+                setStatus(`正在继续：新增 ${continuedEvents.length} 个完整事件，${meta.length || text.length} 字符`, 'working');
+            },
+            onStatus: meta => {
+                if (meta.phase === 'fallback') setStatus(`续写流式连接未完成，已切换普通生成：${meta.reason}`, 'working');
+            },
+        });
+        let parsed = state.parser.finish(result.text);
+        if (parsed.errors.length) {
+            const repaired = await repairMalformedJsonl(parsed.raw, options);
+            parsed = { ...parsed, events: repaired.events, raw: repaired.raw, errors: [] };
+        }
+        state.events = mergeContinuationEvents(baseEvents, parsed.events);
+        state.raw = serializeJsonl(state.events);
+        await finalizeProjectEvents(options, plan);
+    } catch (error) {
+        preserveInterruptedProject(error, controller);
+    } finally {
+        if (state.abortController === controller) state.abortController = null;
         state.parser = null;
         setGenerating(false);
     }
@@ -1704,6 +1795,7 @@ function bindUi() {
     root.addEventListener('change', scheduleStudioVisibilityCheck, true);
     window.addEventListener('resize', scheduleStudioVisibilityCheck, { passive: true });
     root.querySelector('#gwf-generate').addEventListener('click', generateProject);
+    root.querySelector('#gwf-continue').addEventListener('click', continueProject);
     root.querySelector('#gwf-stop').addEventListener('click', stopGeneration);
     root.querySelector('#gwf-generate-greetings').addEventListener('click', generateGreetings);
     root.querySelector('#gwf-stop-greetings').addEventListener('click', stopGreetingGeneration);

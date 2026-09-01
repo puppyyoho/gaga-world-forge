@@ -1,7 +1,7 @@
 export const EXTENSION_NAME = 'gaga-world-forge';
 export const DISPLAY_NAME = '嘎嘎世界与角色工坊';
 export const SETTINGS_KEY = 'gagaWorldForge';
-export const VERSION = '0.2.2';
+export const VERSION = '0.2.3';
 
 export const THEME_OPTIONS = [
     { id: 'twilight', label: '暮色紫粉', shortLabel: '紫粉' },
@@ -850,6 +850,42 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
     if (references.loreText) lines.push('', '【当前主世界书参考】', references.loreText);
     lines.push('', '现在开始输出 JSONL。第一行必须是 project，最后一行必须是 done。');
     return lines.join('\n');
+}
+
+export function buildContinuationPrompt(rawOptions, references = {}, existingEvents = []) {
+    const completed = (Array.isArray(existingEvents) ? existingEvents : []).filter(event => event?.type && event.type !== 'done');
+    const original = buildGenerationPrompt(rawOptions, references)
+        .replace(/\n现在开始输出 JSONL。第一行必须是 project，最后一行必须是 done。$/u, '');
+    const counts = completed.reduce((result, event) => {
+        result[event.type] = (result[event.type] || 0) + 1;
+        return result;
+    }, {});
+    const last = completed.at(-1);
+    return [
+        '请继续完成这份被中断的项目。已经完成的事件会由程序保留，本次只输出后续新增事件。',
+        '',
+        '【续写协议】',
+        '1. 已完成事件是锁定事实。沿用其中的人名、关系、设定、稳定ID与写作方向，不重写、不摘要、不重复输出。',
+        `2. 从 ${last?.type || 'project'} 类型能够合法衔接的位置继续，后续事件仍遵循 project、world、character、npc、relation、lore、done 的顺序。`,
+        '3. 新事件使用全新ID。遇到已经存在的实体时沿用名称、entityId、关系与既定事实。',
+        '4. 补齐原委托中尚未完成的角色卡、人物模块、NPC、关系和世界书内容。优先保证主角色剖析达到长度与密度要求。',
+        '5. 最后一行输出 done。counts 填写已完成事件与本次新增事件合并后的总数量。',
+        '6. 只输出本次新增的 JSONL 事件。每个对象独占一行，禁止 Markdown、说明文字和旧事件副本。',
+        '',
+        '【原始创作委托】',
+        original,
+        '',
+        '【已经完成的事件数量】',
+        JSON.stringify(counts),
+        '',
+        '【已经使用的ID】',
+        completed.map(event => event.id).filter(Boolean).join(', '),
+        '',
+        '【已经完成并保留的事件】',
+        completed.map(event => JSON.stringify(event)).join('\n'),
+        '',
+        '现在从下一条需要的事件开始继续输出，最后输出 done。',
+    ].join('\n');
 }
 
 export function buildGreetingSystemPrompt() {
