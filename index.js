@@ -27,6 +27,7 @@ import {
     buildSystemPrompt,
     createDefaultOptions,
     normalizeOptions,
+    outputSchemaExamples,
     resolveLengthPlan,
 } from './studio-data.js';
 import {
@@ -977,6 +978,38 @@ async function repairMalformedJsonl(raw, options) {
     return { events: parsed.events, raw: result.text };
 }
 
+async function repairInvalidBlueprint(events, errors) {
+    const raw = serializeJsonl(events);
+    if (!raw.trim() || raw.length > 180000) throw new Error('蓝图过长，无法自动修复结构字段');
+    setStatus(`检测到 ${errors.length} 个蓝图结构问题，正在修复字段`, 'working');
+    const schemas = outputSchemaExamples();
+    const result = await generateWithFallback(getContext(), {
+        systemPrompt: [
+            '你是 JSONL 蓝图结构修复器。',
+            '保留全部创作事实、正文、角色关系、事件ID和原有顺序。',
+            '只补齐或修正结构字段、事件类型、字段类型、事件顺序与 done 计数。',
+            '每行输出一个完整 JSON 对象。只输出 JSONL，禁止 Markdown 与解释。',
+        ].join('\n'),
+        prompt: [
+            '【校验问题】',
+            JSON.stringify(errors),
+            '',
+            '【事件结构示例】',
+            JSON.stringify(schemas),
+            '',
+            '【待修复 JSONL】',
+            raw,
+        ].join('\n'),
+        preferStream: false,
+        signal: state.abortController?.signal,
+    });
+    const parser = new JsonlStreamParser();
+    parser.pushCumulative(result.text);
+    const parsed = parser.finish();
+    if (parsed.errors.length) throw new Error(`结构修复结果仍有 ${parsed.errors.length} 个 JSON 对象无法解析`);
+    return { events: parsed.events, raw: result.text };
+}
+
 async function repairContentIssues(events, issues) {
     if (!issues.length) return events;
     setStatus(`正在修复 ${issues.length} 个文风或长度问题`, 'working');
@@ -1078,7 +1111,7 @@ async function generateProject() {
 
         let baseValidation = validateBlueprint(state.events);
         if (!baseValidation.valid) {
-            const repaired = await repairMalformedJsonl(state.raw, options);
+            const repaired = await repairInvalidBlueprint(state.events, baseValidation.errors);
             state.events = filterUnselectedEvents(repaired.events, options);
             state.raw = repaired.raw;
             baseValidation = validateBlueprint(state.events);

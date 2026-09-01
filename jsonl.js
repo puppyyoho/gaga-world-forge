@@ -114,6 +114,68 @@ function cleanLine(line) {
     return trimmed;
 }
 
+function extractJsonObjects(raw) {
+    const source = String(raw ?? '').replace(/^\uFEFF/u, '');
+    const events = [];
+    const errors = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let startLine = 1;
+    let lineNumber = 1;
+
+    for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (char === '\n') lineNumber += 1;
+        if (start < 0) {
+            if (char === '{') {
+                start = index;
+                startLine = lineNumber;
+                depth = 1;
+                inString = false;
+                escaped = false;
+            }
+            continue;
+        }
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (char === '\\') escaped = true;
+            else if (char === '"') inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+        if (char === '{') depth += 1;
+        else if (char === '}') depth -= 1;
+        if (depth !== 0) continue;
+
+        const text = source.slice(start, index + 1);
+        try {
+            const event = JSON.parse(text);
+            if (!isObject(event)) throw new Error('事件必须是 JSON 对象');
+            events.push(event);
+        } catch (error) {
+            errors.push({ lineNumber: startLine, line: text, message: String(error?.message || error) });
+        }
+        start = -1;
+        depth = 0;
+        inString = false;
+        escaped = false;
+    }
+
+    if (start >= 0) {
+        errors.push({
+            lineNumber: startLine,
+            line: source.slice(start),
+            message: '最后一个 JSON 对象未完整结束，可能触及模型输出上限',
+        });
+    }
+    return { events, errors };
+}
+
 export class JsonlStreamParser {
     constructor({ onEvent, onError } = {}) {
         this.onEvent = onEvent;
@@ -137,6 +199,13 @@ export class JsonlStreamParser {
     finish(finalRaw = null) {
         if (finalRaw !== null) this.pushCumulative(finalRaw);
         this.#drain(true);
+        if (this.errors.length) {
+            const recovered = extractJsonObjects(this.raw);
+            if (recovered.events.length) {
+                this.events = recovered.events;
+                this.errors = recovered.errors;
+            }
+        }
         return { events: [...this.events], errors: [...this.errors], raw: this.raw };
     }
 

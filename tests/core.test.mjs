@@ -129,6 +129,35 @@ test('JSONL parser accepts cumulative chunks split inside an object', () => {
     assert.equal(result.events.at(-1).type, 'done');
 });
 
+test('JSONL parser locally recovers pretty printed objects and markdown fences', () => {
+    const source = [
+        '下面是结果：',
+        '```json',
+        ...sampleEvents().map(event => JSON.stringify(event, null, 2)),
+        '```',
+        '生成完成。',
+    ].join('\n');
+    const parser = new JsonlStreamParser();
+    parser.pushCumulative(source.slice(0, 500));
+    parser.pushCumulative(source.slice(0, 2200));
+    parser.pushCumulative(source);
+    const result = parser.finish();
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.events.length, sampleEvents().length);
+    assert.equal(result.events.at(-1).type, 'done');
+});
+
+test('JSONL parser reports a truncated final object after local recovery', () => {
+    const complete = JSON.stringify(sampleEvents()[0]);
+    const truncated = JSON.stringify(sampleEvents()[1]).slice(0, -20);
+    const parser = new JsonlStreamParser();
+    parser.pushCumulative(`${complete}\n${truncated}`);
+    const result = parser.finish();
+    assert.equal(result.events.length, 1);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0].message, /输出上限/);
+});
+
 test('complete blueprint validates and aggregates', () => {
     const events = sampleEvents();
     const result = validateBlueprint(events);

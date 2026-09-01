@@ -90,7 +90,7 @@
 
 GitHub 仓库建好后，可以在 SillyTavern 的 Extensions 面板中选择安装扩展，再粘贴仓库地址。
 
-已经安装旧版本时，可以在 Manage Extensions 中点击更新，再刷新或重启 SillyTavern。标题栏显示 `v0.2.0` 即代表新版蓝绿灯策略与开场白任务卡已经加载。
+已经安装旧版本时，可以在 Manage Extensions 中点击更新，再刷新或重启 SillyTavern。标题栏显示 `v0.2.1` 即代表新版蓝绿灯策略、开场白任务卡与多行 JSONL 容错已经加载。
 
 手动安装时，把整个目录放到当前用户的扩展目录：
 
