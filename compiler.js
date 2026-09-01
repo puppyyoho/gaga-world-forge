@@ -1,11 +1,54 @@
 import { aggregateBlueprint, validateBlueprint } from './jsonl.js';
 
 const IMPORTANCE_ORDER = {
-    critical: 10000,
-    high: 7500,
-    medium: 5000,
-    low: 2500,
+    critical: 9000,
+    high: 7000,
+    medium: 4000,
+    low: 1000,
 };
+
+const CATEGORY_ORDER_OFFSET = {
+    STATE: 950,
+    MOOD: 930,
+    EMOTION: 920,
+    REL_STAGE: 910,
+    TRUST: 900,
+    JEALOUSY: 890,
+    ATTACHMENT: 880,
+    BEHAVIOR: 860,
+    REACTION: 850,
+    COPING: 840,
+    SOCIAL_MASK: 830,
+    REL: 810,
+    WORLD: 780,
+    RULE: 760,
+    SYSTEM: 750,
+    SOCIETY: 740,
+    NPC: 700,
+    EVENT: 650,
+    HOOK: 630,
+    QUEST: 620,
+    FACTION: 580,
+    REGION: 560,
+    LOCATION: 540,
+    ITEM: 520,
+    CULTURE: 480,
+    SPECIES: 460,
+    TERMINOLOGY: 440,
+    MEMORY: 400,
+    MYSTERY: 360,
+    FORESHADOW: 340,
+    RANDOM: 200,
+};
+
+const DYNAMIC_CATEGORIES = new Set(['EMOTION', 'MOOD', 'STATE', 'TRIGGER', 'ATTACHMENT', 'REL_STAGE', 'TRUST', 'JEALOUSY']);
+const SECRET_CATEGORIES = new Set(['MYSTERY', 'FORESHADOW']);
+const BEHAVIOR_CATEGORIES = new Set(['BEHAVIOR', 'HABIT', 'ROUTINE', 'MANNERISM', 'REACTION', 'COPING', 'CONFLICT', 'CARE', 'SOCIAL_MASK']);
+const AFTER_CHARACTER_CATEGORIES = new Set([
+    ...BEHAVIOR_CATEGORIES,
+    'REL', 'ROMANCE', 'INTIMACY', 'NSFW_PREFERENCE', 'NSFW_BEHAVIOR', 'NSFW_SPEECH', 'NSFW_DYNAMIC', 'NSFW_PHYSIOLOGY', 'NSFW_AFTERCARE', 'NSFW_SCENARIO',
+]);
+const ACTIVATION_STRATEGIES = new Set(['allBlue', 'coreBlue', 'tokenSaver']);
 
 const LOGIC_MAP = {
     AND_ANY: 0,
@@ -39,22 +82,93 @@ function stableUid(id, used) {
     return uid;
 }
 
-function activationSettings(event, randomGroup, dependencyKeys) {
+function normalizeActivationStrategy(value) {
+    return ACTIVATION_STRATEGIES.has(value) ? value : 'coreBlue';
+}
+
+function isDynamicEntry(event) {
+    return event.activation?.mode === 'state' || DYNAMIC_CATEGORIES.has(event.category);
+}
+
+function isCoreBlueEntry(event) {
+    const category = String(event.category || '');
+    const importance = String(event.importance || 'medium');
+    if (event.aspect === 'secret' || SECRET_CATEGORIES.has(category) || isDynamicEntry(event)) return false;
+    if (category === 'NPC') return event.aspect === 'base' && ['important', 'minor'].includes(event.tier);
+    if (category === 'REL') return importance !== 'low';
+    if (['WORLD', 'RULE', 'SYSTEM', 'SOCIETY'].includes(category)) return ['critical', 'high'].includes(importance);
+    if (['REGION', 'FACTION', 'EVENT', 'HOOK', 'QUEST', 'ITEM'].includes(category)) return ['critical', 'high'].includes(importance);
+    if (BEHAVIOR_CATEGORIES.has(category)) return ['critical', 'high'].includes(importance);
+    return importance === 'critical';
+}
+
+function isTokenSaverCore(event) {
+    const category = String(event.category || '');
+    const importance = String(event.importance || 'medium');
+    if (event.aspect === 'secret' || SECRET_CATEGORIES.has(category) || isDynamicEntry(event)) return false;
+    if (category === 'WORLD') return ['critical', 'high'].includes(importance);
+    if (category === 'RULE') return importance === 'critical';
+    if (category === 'NPC') return event.aspect === 'base' && event.tier === 'important';
+    return ['REL', 'EVENT', 'HOOK'].includes(category) && importance === 'critical';
+}
+
+function shouldBeConstant(event, mode, strategy) {
+    if (strategy === 'allBlue') return true;
+    if (mode === 'probability') return true;
+    if (!Array.isArray(event.keys) || event.keys.length === 0) return true;
+    if (strategy === 'tokenSaver') return isTokenSaverCore(event);
+    return mode === 'constant' || isCoreBlueEntry(event);
+}
+
+function semanticOrder(event) {
+    const importance = IMPORTANCE_ORDER[event.importance] || IMPORTANCE_ORDER.medium;
+    const category = CATEGORY_ORDER_OFFSET[event.category] ?? 300;
+    const aspect = event.aspect === 'base' ? 80 : event.aspect === 'logic' ? 60 : event.aspect === 'reaction' ? 40 : 0;
+    return importance + category + aspect + (hashId(event.id) % 20);
+}
+
+function semanticPosition(event) {
+    if (isDynamicEntry(event)) return 4;
+    if (AFTER_CHARACTER_CATEGORIES.has(event.category) || (event.category === 'NPC' && ['logic', 'reaction'].includes(event.aspect))) return 1;
+    return 0;
+}
+
+function semanticScanDepth(event, constant) {
+    if (constant) return null;
+    if (isDynamicEntry(event)) return 2;
+    if (['MEMORY', 'MYSTERY', 'FORESHADOW'].includes(event.category) || event.aspect === 'secret') return 6;
+    return 4;
+}
+
+function semanticSticky(event, constant, persistence) {
+    const configured = clampNumber(persistence.sticky, 0, 1000, 0);
+    if (configured > 0) return configured;
+    if (constant) return null;
+    if (['NPC', 'REL', 'LOCATION', 'EVENT', 'HOOK', 'MYSTERY'].includes(event.category)) return 2;
+    return null;
+}
+
+function activationSettings(event, randomGroup, dependencyKeys, strategy) {
     const activation = event.activation || {};
     const mode = activation.mode || 'keyword';
     const probability = Math.round(clampNumber(activation.probability, 0, 100, 100));
     const hasSecondaryKeys = Array.isArray(event.secondaryKeys) && event.secondaryKeys.length > 0;
+    const constant = shouldBeConstant(event, mode, strategy);
+    const pool = String(activation.pool || '').trim();
+    const group = pool ? `${randomGroup}.${pool}` : mode === 'probability' || event.category === 'RANDOM' ? randomGroup : '';
     return {
-        constant: mode === 'constant' || mode === 'probability',
+        constant,
         selective: mode === 'selective' || hasSecondaryKeys || dependencyKeys.length > 0,
         selectiveLogic: LOGIC_MAP[activation.selectiveLogic] ?? 0,
         useProbability: mode === 'probability' || probability < 100,
         probability,
-        group: mode === 'probability' || event.category === 'RANDOM' ? randomGroup : '',
+        group,
+        groupWeight: Math.round(clampNumber(activation.weight, 1, 10000, 100)),
+        useGroupScoring: Boolean(group && mode !== 'probability' && event.category !== 'RANDOM'),
     };
 }
 
-export function compileWorldBook(eventsOrBlueprint, bookName = '') {
+export function compileWorldBook(eventsOrBlueprint, bookName = '', compileOptions = {}) {
     const blueprint = Array.isArray(eventsOrBlueprint) ? aggregateBlueprint(eventsOrBlueprint) : eventsOrBlueprint;
     const validation = validateBlueprint(blueprint.events || [], { requireDone: false });
     if (!validation.valid) throw new Error(`蓝图无法编译：${validation.errors.join('；')}`);
@@ -64,15 +178,16 @@ export function compileWorldBook(eventsOrBlueprint, bookName = '') {
     const loreEvents = blueprint.loreEvents || [];
     const loreById = new Map(loreEvents.map(event => [event.id, event]));
     const randomGroup = `${blueprint.project?.id || 'project.main'}.random`;
+    const strategy = normalizeActivationStrategy(compileOptions.activationStrategy || blueprint.project?.recommendedSettings?.activationStrategy);
     loreEvents.forEach((event, index) => {
         const uid = stableUid(event.id, usedUids);
         const dependencyKeys = uniqueStrings((event.dependencies || []).flatMap(id => {
             const dependency = loreById.get(id);
             return dependency ? [...(dependency.keys || []), ...(dependency.aliases || [])] : [];
         }));
-        const activation = activationSettings(event, randomGroup, dependencyKeys);
+        const activation = activationSettings(event, randomGroup, dependencyKeys, strategy);
         const persistence = event.persistence || {};
-        const orderOffset = Math.max(0, loreEvents.length - index);
+        const position = semanticPosition(event);
         entries[uid] = {
             uid,
             key: uniqueStrings([...(event.keys || []), ...(event.aliases || [])]),
@@ -84,8 +199,8 @@ export function compileWorldBook(eventsOrBlueprint, bookName = '') {
             selective: activation.selective,
             selectiveLogic: activation.selectiveLogic,
             addMemo: true,
-            order: (IMPORTANCE_ORDER[event.importance] || IMPORTANCE_ORDER.medium) + orderOffset,
-            position: 0,
+            order: semanticOrder(event),
+            position,
             disable: false,
             ignoreBudget: false,
             excludeRecursion: false,
@@ -99,18 +214,18 @@ export function compileWorldBook(eventsOrBlueprint, bookName = '') {
             delayUntilRecursion: 0,
             probability: activation.probability,
             useProbability: activation.useProbability,
-            depth: 4,
+            depth: position === 4 ? 2 : 4,
             outletName: '',
             group: activation.group,
             groupOverride: false,
-            groupWeight: 100,
-            scanDepth: null,
+            groupWeight: activation.groupWeight,
+            scanDepth: semanticScanDepth(event, activation.constant),
             caseSensitive: false,
             matchWholeWords: false,
-            useGroupScoring: false,
+            useGroupScoring: activation.useGroupScoring,
             automationId: '',
             role: 0,
-            sticky: clampNumber(persistence.sticky, 0, 1000, 0) || null,
+            sticky: semanticSticky(event, activation.constant, persistence),
             cooldown: clampNumber(persistence.cooldown, 0, 1000, 0) || null,
             delay: clampNumber(persistence.delay, 0, 1000, 0) || null,
             triggers: [],
@@ -123,6 +238,7 @@ export function compileWorldBook(eventsOrBlueprint, bookName = '') {
                     dependencies: uniqueStrings(event.dependencies),
                     entityId: event.entityId || '',
                     aspect: event.aspect || '',
+                    activationStrategy: strategy,
                 },
             },
         };
@@ -133,21 +249,29 @@ export function compileWorldBook(eventsOrBlueprint, bookName = '') {
         entries,
         extensions: {
             gagaWorldForge: {
-                version: 1,
+                version: 2,
                 projectId: blueprint.project?.id || 'project.main',
-                recommendedSettings: blueprint.project?.recommendedSettings || {},
+                activationStrategy: strategy,
+                recommendedSettings: {
+                    ...(blueprint.project?.recommendedSettings || {}),
+                    scanDepth: 4,
+                    budgetPercent: strategy === 'allBlue' ? 35 : 25,
+                    recursiveScanning: strategy !== 'allBlue',
+                    activationStrategy: strategy,
+                },
             },
         },
     };
 }
 
 function toEmbeddedBook(nativeBook) {
+    const recommended = nativeBook.extensions?.gagaWorldForge?.recommendedSettings || {};
     return {
         name: nativeBook.name,
         description: '由嘎嘎世界与角色工坊生成',
-        scan_depth: 2,
-        token_budget: 2048,
-        recursive_scanning: true,
+        scan_depth: recommended.scanDepth ?? 4,
+        token_budget: recommended.tokenBudget ?? 2048,
+        recursive_scanning: recommended.recursiveScanning !== false,
         extensions: nativeBook.extensions || {},
         entries: Object.values(nativeBook.entries).map(entry => ({
             id: entry.uid,
@@ -166,16 +290,24 @@ function toEmbeddedBook(nativeBook) {
                 display_index: entry.displayIndex,
                 exclude_recursion: entry.excludeRecursion,
                 prevent_recursion: entry.preventRecursion,
+                delay_until_recursion: entry.delayUntilRecursion,
                 probability: entry.probability,
                 useProbability: entry.useProbability,
                 depth: entry.depth,
+                role: entry.role,
                 selectiveLogic: entry.selectiveLogic,
                 group: entry.group,
+                group_override: entry.groupOverride,
                 group_weight: entry.groupWeight,
+                use_group_scoring: entry.useGroupScoring,
+                scan_depth: entry.scanDepth,
+                case_sensitive: entry.caseSensitive,
                 sticky: entry.sticky,
                 cooldown: entry.cooldown,
                 delay: entry.delay,
-                match_whole_words: false,
+                triggers: entry.triggers,
+                ignore_budget: entry.ignoreBudget,
+                match_whole_words: entry.matchWholeWords,
                 gagaWorldForge: entry.extensions?.gagaWorldForge || {},
             },
         })),
@@ -204,7 +336,7 @@ export function compileCharacterCard(eventsOrBlueprint, character = null, option
     if (!selected.name || !selected.description) throw new Error('缺少可编译的主角色卡');
 
     const worldBookName = options.worldBookName || `${blueprint.project?.name || selected.name} 世界书`;
-    const nativeBook = compileWorldBook(blueprint, worldBookName);
+    const nativeBook = compileWorldBook(blueprint, worldBookName, options);
     const embedBook = options.embedBook !== false;
     return {
         spec: 'chara_card_v2',
@@ -280,8 +412,8 @@ function entryMatches(entry, text) {
     return matches.some(Boolean);
 }
 
-export function simulateLoreActivation(eventsOrBlueprint, text) {
-    const book = compileWorldBook(eventsOrBlueprint);
+export function simulateLoreActivation(eventsOrBlueprint, text, compileOptions = {}) {
+    const book = compileWorldBook(eventsOrBlueprint, '', compileOptions);
     const entries = Object.values(book.entries).sort((a, b) => b.order - a.order);
     const direct = entries.filter(entry => entryMatches(entry, text));
     const directIds = new Set(direct.map(entry => entry.uid));

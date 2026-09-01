@@ -58,6 +58,16 @@ function validateLoreEvent(event, errors) {
     if (!Number.isFinite(probability) || probability < 0 || probability > 100) {
         errors.push(`${event.id}.activation.probability 必须在 0 至 100 之间`);
     }
+    if (event.activation?.pool !== undefined && typeof event.activation.pool !== 'string') {
+        errors.push(`${event.id}.activation.pool 必须是字符串`);
+    }
+    if (typeof event.activation?.pool === 'string' && event.activation.pool && !/^[a-z0-9._-]+$/u.test(event.activation.pool)) {
+        errors.push(`${event.id}.activation.pool 含有不稳定字符`);
+    }
+    const weight = Number(event.activation?.weight ?? 100);
+    if (!Number.isFinite(weight) || weight < 1 || weight > 10000) {
+        errors.push(`${event.id}.activation.weight 必须在 1 至 10000 之间`);
+    }
     if (!isObject(event.persistence)) errors.push(`${event.id}.persistence 必须是对象`);
     for (const key of ['sticky', 'cooldown', 'delay']) {
         const number = Number(event.persistence?.[key] ?? 0);

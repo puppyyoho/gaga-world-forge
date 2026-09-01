@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildGreetingPrompt, normalizeOptions, resolveLengthPlan } from '../studio-data.js';
+import { buildGreetingPrompt, buildGreetingSystemPrompt, normalizeOptions, resolveLengthPlan } from '../studio-data.js';
 import {
     JsonlStreamParser,
     aggregateBlueprint,
@@ -167,10 +167,47 @@ test('greeting prompt includes the requested count, styles, and user settings', 
         },
         loreEvents: [],
     }, options);
-    assert.match(prompt, /3 条/);
+    assert.match(prompt, /3 张/);
     assert.match(prompt, /克制留白/);
     assert.match(prompt, /竞争对手/);
     assert.match(prompt, /带着旧照片来访的人/);
+    assert.match(prompt, /生活流写实/);
+    assert.match(prompt, /雷蒙德・卡佛/);
+    assert.equal((prompt.match(/雷蒙德・卡佛/gu) || []).length, 1);
+});
+
+test('greeting task cards keep independent requirements and output slots', () => {
+    const options = normalizeOptions({
+        greetingSlots: [
+            {
+                id: 'greeting.slot.01',
+                customRequirement: '停电后的旧教学楼走廊',
+                userPreset: 'rival',
+                userSetting: '手里拿着三年前的维修照片',
+                openingStyle: 'mystery',
+                literaryStyle: 'psychologicalSuspense',
+                intensity: 'rich',
+                length: 'brief',
+                asDefault: true,
+            },
+            {
+                id: 'greeting.slot.02',
+                customRequirement: '周末清晨一起核对生活费',
+                openingStyle: 'daily',
+                literaryStyle: 'sliceRealism',
+                intensity: 'light',
+                length: 'standard',
+                asDefault: false,
+            },
+        ],
+    });
+    const prompt = buildGreetingPrompt({ mainCharacter: { name: '林知遥' }, loreEvents: [] }, options);
+    assert.match(prompt, /slotId：greeting\.slot\.01/);
+    assert.match(prompt, /停电后的旧教学楼走廊/);
+    assert.match(prompt, /保存位置：默认开场白 first_mes/);
+    assert.match(prompt, /悬疑心理流/);
+    assert.match(prompt, /周末清晨一起核对生活费/);
+    assert.match(buildGreetingSystemPrompt(), /每张任务卡输出一次/);
 });
 
 test('style scanner catches contrast sentences and dash characters', () => {
@@ -218,6 +255,58 @@ test('worldbook compiler preserves SillyTavern order and selective fields', () =
     assert.equal(scholarship.order > relation.order, true);
 });
 
+test('worldbook activation strategies produce deliberate blue and green entries', () => {
+    const events = sampleEvents();
+    const allBlueBook = compileWorldBook(events, '', { activationStrategy: 'allBlue' });
+    const allBlue = Object.values(allBlueBook.entries);
+    assert.equal(allBlue.every(entry => entry.constant), true);
+    assert.equal(allBlueBook.extensions.gagaWorldForge.recommendedSettings.budgetPercent, 35);
+
+    const coreBlue = Object.values(compileWorldBook(events, '', { activationStrategy: 'coreBlue' }).entries);
+    assert.equal(coreBlue.find(entry => entry.comment.includes('陈砚舟基础印象')).constant, true);
+    assert.equal(coreBlue.find(entry => entry.comment.includes('奖学金考核')).constant, true);
+
+    const tokenSaver = Object.values(compileWorldBook(events, '', { activationStrategy: 'tokenSaver' }).entries);
+    assert.equal(tokenSaver.find(entry => entry.comment.includes('陈砚舟基础印象')).constant, false);
+    assert.equal(tokenSaver.find(entry => entry.comment.includes('学生听证会')).constant, false);
+});
+
+test('worldbook compiler maps dynamic state and inclusion pool fields to native SillyTavern fields', () => {
+    const events = sampleEvents();
+    events.splice(-1, 0, {
+        type: 'lore',
+        id: 'state.chen.pressure',
+        category: 'STATE',
+        title: '[STATE] 陈砚舟正在承受预算压力',
+        content: '陈砚舟连续两次压低申请金额，说话速度变快，会优先追问票据来源。',
+        aliases: [],
+        keys: ['预算压力', '压低申请金额'],
+        secondaryKeys: [],
+        activation: { mode: 'state', selectiveLogic: 'AND_ANY', probability: 100, pool: 'chen-pressure', weight: 240 },
+        importance: 'medium',
+        persistence: { sticky: 3, cooldown: 2, delay: 0 },
+        dependencies: [],
+        preventRecursion: true,
+        entityId: 'npc.chen',
+        aspect: 'state',
+    });
+    const book = compileWorldBook(events, '', { activationStrategy: 'coreBlue' });
+    const stateEntry = Object.values(book.entries).find(entry => entry.comment.includes('预算压力'));
+    assert.equal(stateEntry.constant, false);
+    assert.equal(stateEntry.position, 4);
+    assert.equal(stateEntry.depth, 2);
+    assert.equal(stateEntry.scanDepth, 2);
+    assert.equal(stateEntry.group.endsWith('.chen-pressure'), true);
+    assert.equal(stateEntry.groupWeight, 240);
+    assert.equal(stateEntry.useGroupScoring, true);
+
+    const card = compileCharacterCard(events, null, { activationStrategy: 'coreBlue' });
+    const embedded = card.data.character_book.entries.find(entry => entry.comment.includes('预算压力'));
+    assert.equal(embedded.extensions.position, 4);
+    assert.equal(embedded.extensions.scan_depth, 2);
+    assert.equal(embedded.extensions.group_weight, 240);
+});
+
 test('character card compiler embeds the same lorebook', () => {
     const events = sampleEvents();
     events[2].alternateGreetings = ['雨夜里，她把伞向你这边倾了倾。'];
@@ -230,14 +319,16 @@ test('character card compiler embeds the same lorebook', () => {
 });
 
 test('trigger simulator distinguishes direct and recursive activation', () => {
-    const simulation = simulateLoreActivation(sampleEvents(), '奖学金材料提到听证会的维修报价。');
+    const simulation = simulateLoreActivation(sampleEvents(), '奖学金材料提到听证会的维修报价。', { activationStrategy: 'tokenSaver' });
     assert.equal(simulation.results.some(result => result.title.includes('学生听证会') && result.phase === 'direct'), true);
     assert.equal(simulation.totalChars > 0, true);
 
     const recursiveEvents = sampleEvents();
     recursiveEvents[1].activation.mode = 'constant';
+    recursiveEvents[1].category = 'WORLD';
+    recursiveEvents[1].importance = 'critical';
     recursiveEvents[1].content += ' 陈砚舟负责整理本月资料。';
-    const recursive = simulateLoreActivation(recursiveEvents, '今天照常上课。');
+    const recursive = simulateLoreActivation(recursiveEvents, '今天照常上课。', { activationStrategy: 'tokenSaver' });
     assert.equal(recursive.results.some(result => result.title.includes('陈砚舟') && result.phase === 'recursive'), true);
 });
 

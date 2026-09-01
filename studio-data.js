@@ -1,7 +1,7 @@
 export const EXTENSION_NAME = 'gaga-world-forge';
 export const DISPLAY_NAME = '嘎嘎世界与角色工坊';
 export const SETTINGS_KEY = 'gagaWorldForge';
-export const VERSION = '0.1.8';
+export const VERSION = '0.2.0';
 
 export const THEME_OPTIONS = [
     { id: 'twilight', label: '暮色紫粉', shortLabel: '紫粉' },
@@ -18,6 +18,7 @@ export const THEME_OPTIONS = [
 const THEME_IDS = new Set(THEME_OPTIONS.map(theme => theme.id));
 
 export const GREETING_STYLE_PRESETS = [
+    { id: 'random', label: '随机开场' },
     { id: 'immersive', label: '沉浸叙事' },
     { id: 'daily', label: '日常生活' },
     { id: 'campus', label: '校园青春' },
@@ -28,6 +29,139 @@ export const GREETING_STYLE_PRESETS = [
     { id: 'bittersweet', label: '酸涩重逢' },
     { id: 'action', label: '任务危机' },
     { id: 'quiet', label: '克制留白' },
+];
+
+export const ACTIVATION_STRATEGIES = [
+    {
+        id: 'allBlue',
+        label: '全部蓝灯',
+        description: '所有条目常驻可见，适合大上下文。隐藏资料也会进入模型上下文。',
+        instruction: '所有世界书条目将由编译器设为蓝灯常驻。正文需要格外紧凑，避免重复事实。状态分支与随机事件仍要使用明确的状态说明、概率和互斥池。',
+    },
+    {
+        id: 'coreBlue',
+        label: '核心蓝灯',
+        description: '世界核心、关键规则、NPC基础档案与主要关系常驻，细节按需触发。',
+        instruction: '生成一条紧凑的世界核心条目。重要与次要NPC的基础档案、主要关系、当前事件和关键规则需要容易被编译器识别为核心资料。秘密、历史细节、地点细节和条件反应使用具体关键词触发。',
+    },
+    {
+        id: 'tokenSaver',
+        label: '节省 Token',
+        description: '只让最核心的索引与规则常驻，其余资料使用关键词和递归。',
+        instruction: '世界核心条目需要压缩为短索引。只有决定世界运行方式的关键规则、重要NPC基础档案和当前主线可以标为 critical。其余资料使用具体关键词，配合两层以内的递归关系。',
+    },
+];
+
+export const LITERARY_STYLE_PRESETS = [
+    {
+        id: 'sliceRealism',
+        label: '生活流写实',
+        prompt: `采用生活流写实文风，取法雷蒙德・卡佛的极简叙事语态与爱丽丝・门罗对日常心理、关系暗流和时间余波的细密观察。
+
+叙事贴近日常生活本身的流速与肌理，以平白、克制、准确的语言承接人物、动作与事物，让每件物品保留自身的重量、温度、价格、磨损和使用痕迹。情节跟随人物当下的行动逐步展开。环境、工作、生计、饮食和居住状况随着人物的走动、操持、等待与短暂失神进入画面。
+
+细节嵌入生活过程。水壶烧开的声音、洗旧的袖口、桌面留下的账单、错过的公交车、被反复修补的物件，都可以成为人物处境的一部分。每项细节都需要揭示生活条件、关系距离或当下压力。
+
+情绪通过叙事缝隙显现，寄存在话题转移、语句中断、视线偏移、动作迟缓、称呼变化和一件未被解释的旧物里。读者通过行为顺序和语言停顿感知其中的疲惫、依恋、戒备或遗憾。
+
+句法保持松弛与清楚，以短句和简单结构为主，长句用于容纳回忆、迟疑或逐渐浮现的心理波动。对话保留日常口语中的停顿、重复、游离和答非所问。人物经常绕开最想谈论的事情，让真正重要的信息停留在话语边缘。
+
+整体呈现为一段未经剪辑的日常切片。叙述保持平视，控制抒情和修辞密度，让寻常时日中的关系变化缓慢浮现。开场结尾需要留下一个具体而自然的互动入口。`,
+    },
+    {
+        id: 'poeticClassical',
+        label: '诗性古典散文',
+        prompt: `采用诗性古典散文。以一个贯穿场景的核心意象组织段落，让光线、声音、气味、季节和旧物承载人物情绪。古典语感轻度融入现代中文，句式在舒展与凝练之间自然变化。
+
+意象需要扎根于人物眼前的事物，并随着动作和关系推进产生变化。每段控制一至两个主要意象，隐喻保持清晰，典故保持易懂。情绪含蓄地附着在景物、身体动作和称呼变化中。对白继续使用人物自身的口吻，结尾保留清楚的互动入口。`,
+    },
+    {
+        id: 'minimal',
+        label: '极简留白',
+        prompt: `采用极简留白文风。使用短句、准确动词和少量感官细节。情绪藏在停顿、未完成的话、位置变化和物件处理方式里。段落简短，对话克制，解释保持最低限度。每一个留下的细节都要影响气氛、关系或选择。结尾停在一句等待回应的话或一个尚未完成的动作上。`,
+    },
+    {
+        id: 'modernist',
+        label: '现代主义意识流',
+        prompt: `采用现代主义意识流文风。让当前感官、短暂记忆和未完成的念头自然交叠，同时保留稳定的地点、时间和动作锚点。意识变化由声音、触碰、气味、物品或一句话触发。句式允许回环、跳接和自我修正，人物当下正在做的事情始终清晰，互动入口保持可见。`,
+    },
+    {
+        id: 'urbanSensation',
+        label: '新感觉派都市',
+        prompt: `采用新感觉派都市文风。突出灯光、玻璃、广告、车流、电子屏、金属、噪声和人群速度。使用快速切换的视觉与听觉片段表现都市压力和人物距离。句式利落，感官对比鲜明，情绪藏在空间错位、身体节奏与短促对白中。场景需要保留一条能够继续追随的行动线。`,
+    },
+    {
+        id: 'magicalRealism',
+        label: '魔幻现实',
+        prompt: `采用魔幻现实文风。让一项超常现象平静地进入日常生活，人物依据当地文化、职业经验和生活条件处理它。超常事物需要影响现实选择、资源、关系或记忆。叙述语气具体而笃定，奇异感来自事件本身及其现实后果。`,
+    },
+    {
+        id: 'gothic',
+        label: '哥特幽微',
+        prompt: `采用哥特幽微文风。利用封闭空间、旧建筑、天气、回声、阴影、家族遗物和失序痕迹积累不安。信息逐层释放，危险保持可感知的现实形态。人物的戒备通过身体距离、声音变化和对环境的熟悉程度呈现。结尾留下可调查的异常或迫近的选择。`,
+    },
+    {
+        id: 'noir',
+        label: '黑色侦探',
+        prompt: `采用黑色侦探文风。突出城市阴影、利益交换、危险直觉和带有目的的对话。叙述简洁锐利，观察集中于破绽、习惯、金钱、权力和隐藏动机。允许冷幽默与克制讽刺。场景中需要出现一项可以继续追问的疑点。`,
+    },
+    {
+        id: 'zhiguai',
+        label: '志怪笔记',
+        prompt: `采用志怪笔记文风。以简练、笃定的口吻记录异常人物、地点或事件，适度使用古典词汇和民间传闻结构。奇事需要有具体时间、地点、见证者和现实后果。保留含混余韵，同时提供角色能够介入的当下线索。`,
+    },
+    {
+        id: 'chapterLegend',
+        label: '古典章回传奇',
+        prompt: `采用古典章回传奇文风。叙述带有说书节奏，场景推进清楚，人物出场具有鲜明动作和身份线索。适量使用典雅表达、对偶节奏和悬念收束。控制古语比例，确保对白自然易懂，结尾留下待续事件。`,
+    },
+    {
+        id: 'epistolary',
+        label: '书信体',
+        prompt: `采用书信体文风。围绕明确的书写对象、书写目的、时间和地点展开。文字中保留写作者的犹豫、删改感、称呼习惯和没有说尽的部分。信件必须携带一项需要用户回应的信息、请求、邀请或隐秘线索。`,
+    },
+    {
+        id: 'cinematic',
+        label: '电影镜头',
+        prompt: `采用电影镜头式叙述。先建立空间和人物位置，再通过近景动作、声音变化、视线转移和物件细节推进场景。抽象解释保持精简，动作保持连续。镜头切换服务于信息揭示，结尾停在具有互动可能的动作或画面上。`,
+    },
+    {
+        id: 'dialogueDriven',
+        label: '戏剧化对白',
+        prompt: `采用对白驱动文风。让人物关系、冲突和隐藏意图主要通过对话推进，穿插简短而准确的动作提示。每句对白承担试探、回避、交换信息、施压或缓和关系的功能。保留角色专属用词、称呼习惯和说话节奏。`,
+    },
+    {
+        id: 'prosePoem',
+        label: '散文诗',
+        prompt: `采用散文诗文风。围绕单一情绪核心和连续意象展开，重视声音、节奏、重复和段落呼吸。现实场景与人物动作构成叙述骨架。意象逐步变化并抵达互动入口，抽象抒情保持适量。`,
+    },
+    {
+        id: 'absurdist',
+        label: '荒诞主义',
+        prompt: `采用荒诞主义文风。设置一项制度化、日常化且逻辑自洽的荒谬处境，让人物认真处理它带来的现实麻烦。语言保持冷静，喜感来自规则与生活需求的冲突。场景需要提供可以行动、质疑、合作或离开的选择空间。`,
+    },
+    {
+        id: 'socialRealism',
+        label: '社会现实主义',
+        prompt: `采用社会现实主义文风。通过住房、收入、教育、劳动、医疗、消费和社会网络展现人物处境。让制度与阶层直接影响当下选择。叙述保持具体克制，人物拥有自己的利益、尊严、妥协和行动策略。`,
+    },
+    {
+        id: 'psychologicalSuspense',
+        label: '悬疑心理流',
+        prompt: `采用悬疑心理流文风。围绕一项细小异常逐步建立疑问，通过记忆偏差、动作迟疑、环境变化和言语漏洞增加压力。信息按照可观察事实逐层释放。每段提供新的判断依据，结尾留下能够调查或追问的入口。`,
+    },
+];
+
+export const GREETING_INTENSITY_PRESETS = [
+    { id: 'light', label: '轻度', prompt: '保持自然易读，只在意象、节奏和观察方式上体现所选文风。' },
+    { id: 'medium', label: '中度', prompt: '明显执行所选文风，同时保证动作、对白和场景信息清楚。' },
+    { id: 'rich', label: '浓烈', prompt: '充分强化所选文风的句式与叙述技巧，控制修辞密度，确保人物互动顺畅。' },
+];
+
+export const GREETING_LENGTH_PRESETS = [
+    { id: 'brief', label: '短篇', prompt: '正文控制在约 300 至 500 个中文字符。' },
+    { id: 'standard', label: '标准', prompt: '正文控制在约 600 至 900 个中文字符。' },
+    { id: 'long', label: '长篇', prompt: '正文控制在约 1000 至 1500 个中文字符。' },
 ];
 
 export const GREETING_USER_PRESETS = [
@@ -43,6 +177,61 @@ export const GREETING_USER_PRESETS = [
 
 const GREETING_STYLE_IDS = new Set(GREETING_STYLE_PRESETS.map(item => item.id));
 const GREETING_USER_IDS = new Set(GREETING_USER_PRESETS.map(item => item.id));
+const ACTIVATION_STRATEGY_IDS = new Set(ACTIVATION_STRATEGIES.map(item => item.id));
+const LITERARY_STYLE_IDS = new Set(LITERARY_STYLE_PRESETS.map(item => item.id));
+const GREETING_INTENSITY_IDS = new Set(GREETING_INTENSITY_PRESETS.map(item => item.id));
+const GREETING_LENGTH_IDS = new Set(GREETING_LENGTH_PRESETS.map(item => item.id));
+
+function defaultGreetingSlot(index = 0) {
+    return {
+        id: `greeting.slot.${String(index + 1).padStart(2, '0')}`,
+        customRequirement: '',
+        userPreset: '',
+        userSetting: '',
+        openingStyle: 'random',
+        literaryStyle: 'sliceRealism',
+        intensity: 'medium',
+        length: 'standard',
+        asDefault: false,
+    };
+}
+
+function normalizeGreetingSlots(input = {}, defaults = []) {
+    const legacyCount = clampInteger(input.greetingCount, 1, 12, Math.max(1, defaults.length || 2));
+    const legacyStyles = Array.isArray(input.greetingStyles) ? input.greetingStyles.filter(id => GREETING_STYLE_IDS.has(id)) : [];
+    const legacyUsers = [
+        ...(Array.isArray(input.greetingUserPresets) ? input.greetingUserPresets.map(id => GREETING_USER_PRESETS.find(item => item.id === id)?.label).filter(Boolean) : []),
+        ...String(input.greetingUserSettings || '').split(/\r?\n/u).map(item => item.trim()).filter(Boolean),
+    ];
+    const source = Array.isArray(input.greetingSlots) && input.greetingSlots.length
+        ? input.greetingSlots
+        : Array.from({ length: legacyCount }, (_, index) => ({
+            ...defaultGreetingSlot(index),
+            openingStyle: legacyStyles[index % Math.max(1, legacyStyles.length)] || defaultGreetingSlot(index).openingStyle,
+            userSetting: legacyUsers[index % Math.max(1, legacyUsers.length)] || '',
+        }));
+    const usedIds = new Set();
+    let defaultClaimed = false;
+    return source.slice(0, 12).map((raw, index) => {
+        const fallback = defaultGreetingSlot(index);
+        let id = /^greeting\.slot\.\d+$/u.test(String(raw?.id || '')) ? String(raw.id) : fallback.id;
+        while (usedIds.has(id)) id = `greeting.slot.${String(index + usedIds.size + 1).padStart(2, '0')}`;
+        usedIds.add(id);
+        const asDefault = Boolean(raw?.asDefault) && !defaultClaimed;
+        if (asDefault) defaultClaimed = true;
+        return {
+            id,
+            customRequirement: String(raw?.customRequirement || '').trim().slice(0, 3000),
+            userPreset: GREETING_USER_IDS.has(raw?.userPreset) ? raw.userPreset : '',
+            userSetting: String(raw?.userSetting || '').trim().slice(0, 2000),
+            openingStyle: GREETING_STYLE_IDS.has(raw?.openingStyle) ? raw.openingStyle : fallback.openingStyle,
+            literaryStyle: LITERARY_STYLE_IDS.has(raw?.literaryStyle) ? raw.literaryStyle : fallback.literaryStyle,
+            intensity: GREETING_INTENSITY_IDS.has(raw?.intensity) ? raw.intensity : fallback.intensity,
+            length: GREETING_LENGTH_IDS.has(raw?.length) ? raw.length : fallback.length,
+            asDefault,
+        };
+    });
+}
 
 export const WORLD_PRESETS = [
     { id: 'campus', label: '校园' },
@@ -213,6 +402,7 @@ export function createDefaultModules() {
 }
 
 export function createDefaultOptions() {
+    const greetingSlots = [defaultGreetingSlot(0), defaultGreetingSlot(1)];
     return {
         brief: '',
         referenceText: '',
@@ -240,10 +430,12 @@ export function createDefaultOptions() {
         referenceCurrentCharacter: false,
         referencePrimaryLorebook: false,
         theme: 'twilight',
-        greetingCount: 4,
+        activationStrategy: 'coreBlue',
+        greetingCount: greetingSlots.length,
         greetingStyles: ['immersive', 'daily', 'campus'],
         greetingUserPresets: [],
         greetingUserSettings: '',
+        greetingSlots,
     };
 }
 
@@ -256,6 +448,7 @@ export function normalizeOptions(input = {}) {
     const defaults = createDefaultOptions();
     const lengthPreset = Object.hasOwn(LENGTH_PRESETS, input.lengthPreset) ? input.lengthPreset : defaults.lengthPreset;
     const custom = { ...defaults.customLength, ...(input.customLength || {}) };
+    const greetingSlots = normalizeGreetingSlots(input, defaults.greetingSlots);
     return {
         ...defaults,
         ...input,
@@ -263,7 +456,8 @@ export function normalizeOptions(input = {}) {
         referenceText: String(input.referenceText || '').trim(),
         projectName: String(input.projectName || '').trim().slice(0, 100),
         theme: THEME_IDS.has(input.theme) ? input.theme : defaults.theme,
-        greetingCount: clampInteger(input.greetingCount, 1, 12, defaults.greetingCount),
+        activationStrategy: ACTIVATION_STRATEGY_IDS.has(input.activationStrategy) ? input.activationStrategy : defaults.activationStrategy,
+        greetingCount: greetingSlots.length,
         greetingStyles: [...new Set((Array.isArray(input.greetingStyles) ? input.greetingStyles : defaults.greetingStyles).filter(id => GREETING_STYLE_IDS.has(id)))]
             .slice(0, GREETING_STYLE_PRESETS.length),
         greetingUserPresets: [...new Set((Array.isArray(input.greetingUserPresets) ? input.greetingUserPresets : defaults.greetingUserPresets).filter(id => GREETING_USER_IDS.has(id)))]
@@ -275,6 +469,7 @@ export function normalizeOptions(input = {}) {
             .slice(0, 12)
             .join('\n')
             .slice(0, 4000),
+        greetingSlots,
         modules: { ...defaults.modules, ...(input.modules || {}), mainCharacter: true },
         lengthPreset,
         customLength: {
@@ -311,6 +506,44 @@ function greetingUserSettingLabels(options) {
         ...labelsFor(options.greetingUserPresets, GREETING_USER_PRESETS),
         ...options.greetingUserSettings.split('\n').filter(Boolean),
     ].filter((value, index, values) => values.indexOf(value) === index);
+}
+
+function itemById(items, id) {
+    return items.find(item => item.id === id) || items[0];
+}
+
+function greetingSlotInstruction(slot, index, { includeStylePrompt = true } = {}) {
+    const opening = itemById(GREETING_STYLE_PRESETS, slot.openingStyle);
+    const literary = itemById(LITERARY_STYLE_PRESETS, slot.literaryStyle);
+    const intensity = itemById(GREETING_INTENSITY_PRESETS, slot.intensity);
+    const length = itemById(GREETING_LENGTH_PRESETS, slot.length);
+    const userPreset = GREETING_USER_PRESETS.find(item => item.id === slot.userPreset)?.label || '';
+    const userSetting = [userPreset, slot.userSetting].filter(Boolean).join('，');
+    return [
+        `【开场任务 ${index + 1}】`,
+        `slotId：${slot.id}`,
+        `保存位置：${slot.asDefault ? '默认开场白 first_mes' : '备用开场白 alternate_greetings'}`,
+        `自定义要求：${slot.customRequirement || '留空，依据角色与世界随机设计场景'}`,
+        `U 设定：${userSetting || '留空，依据角色关系随机设计自然进入方式'}`,
+        `开场类型：${opening.label}`,
+        `文学文风：${literary.label}`,
+        ...(includeStylePrompt ? [`文风执行：${literary.prompt}`] : []),
+        `文风强度：${intensity.prompt}`,
+        `长度要求：${length.prompt}`,
+    ].join('\n');
+}
+
+function greetingLiteraryStyleLibrary(options) {
+    const styleIds = [...new Set(options.greetingSlots.map(slot => slot.literaryStyle))];
+    return styleIds.map(id => {
+        const literary = itemById(LITERARY_STYLE_PRESETS, id);
+        return `【${literary.label}】\n${literary.prompt}`;
+    }).join('\n\n');
+}
+
+function activationStrategyInstruction(options) {
+    const strategy = itemById(ACTIVATION_STRATEGIES, options.activationStrategy);
+    return `${strategy.label}。${strategy.instruction}`;
 }
 
 export function resolveLengthPlan(rawOptions) {
@@ -395,6 +628,8 @@ function sharedLoreSchema(type) {
             mode: 'keyword',
             selectiveLogic: 'AND_ANY',
             probability: 100,
+            pool: '',
+            weight: 100,
         },
         importance: 'medium',
         persistence: { sticky: 0, cooldown: 0, delay: 0 },
@@ -413,7 +648,7 @@ export function outputSchemaExamples() {
             name: '项目名',
             summary: '统一创作方向与当前矛盾',
             tags: ['题材'],
-            recommendedSettings: { scanDepth: 2, budgetPercent: 25, recursiveScanning: true, note: '简短建议' },
+            recommendedSettings: { scanDepth: 4, budgetPercent: 25, recursiveScanning: true, activationStrategy: 'coreBlue', note: '简短建议' },
         },
         world: sharedLoreSchema('world'),
         character: {
@@ -507,12 +742,14 @@ export function buildSystemPrompt() {
 【世界书设计】
 1. 每个 world、npc、relation、lore 事件代表一个实际世界书条目。正文脱离标题后仍应自包含完整语义。
 2. 路人NPC用单条紧凑档案。次要NPC用单条完整档案。重要NPC按复杂度拆成二至四条，aspect 使用 base、logic、secret、reaction，并用同一个 entityId 归组。
-3. 人物条目需要包含典型反应模式，让模型知道人物遇到具体话题、事件或某类人时会采取什么行动。
+3. NPC的 base 条目需要简短写清身份、活动范围、当前诉求、自然出场条件和默认态度，使模型能够主动引入人物。logic、secret、reaction 条目承载按场景加载的详细资料。
 4. 每个世界书事件标注稳定ID、类别、别名、触发关键词、重要程度、持续属性、依赖条目。关键词优先使用具体人名、地名、事件名和动作词，避免宽泛情绪词与泛化评价词。
 5. 状态条目单独拆分，persistence 使用消息数量。sticky 表示触发后的持续消息数，cooldown 表示结束后的冷却消息数，delay 表示聊天达到多少条消息后才可触发。
 6. 不输出 SillyTavern 的 UID、Order、Position、Group Weight 等编译字段。程序会统一计算。
 7. 递归依赖最多两层。叶子条目将 preventRecursion 设为 true。深层秘密使用明确话题、证据或事件关键词触发，不能把递归扫描当作剧情解锁系统。
-8. activation.mode 只使用 constant、keyword、selective、probability、state。随机事件使用 probability，并给出低概率与具体触发条件。概率只代表条目通过触发后的入选机会。
+8. activation.mode 只使用 constant、keyword、selective、probability、state。probability 代表每轮主动抽取的随机条目。随机事件给出低概率与具体出现条件。
+9. activation.pool 只用于互斥状态或随机事件池，使用稳定的小写英文ID。普通事实将 pool 留空。activation.weight 表示同一池内的相对抽取权重，默认值为100。
+10. 世界核心条目需要紧凑写清世界前提、当前地区、主要力量和正在发展的矛盾。NPC基础档案、当前关系和当前事件使用较高 importance。地点细节、历史资料、人物秘密和条件反应根据实际影响设置为 medium 或 low。
 
 【文风】
 1. 使用自然流畅且有画面感的中文，减少翻译腔、套路网文腔和设定说明书腔。
@@ -576,9 +813,16 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
         '【长度约束】',
         lengthInstruction(plan),
         sectionLengthInstruction(options),
-        '【开场白风格】' + (labelsFor(options.greetingStyles, GREETING_STYLE_PRESETS).join('、') || '根据角色处境自由变化'),
-        '【U 设定组合】' + (greetingUserSettingLabels(options).join('、') || '根据用户创作要求设计多种自然进入方式'),
-        '【开场白计划】主角色的 firstMessage 作为默认开场白。请额外生成 ' + options.greetingCount + ' 条 alternateGreetings，优先覆盖已选风格与 U 设定，确保每条开场的场景、冲突入口和互动距离有明显差异。',
+        '',
+        '【世界书触发策略】',
+        activationStrategyInstruction(options),
+        '',
+        '【开场白文学文风库】',
+        greetingLiteraryStyleLibrary(options),
+        '',
+        '【开场白任务】',
+        options.greetingSlots.map((slot, index) => greetingSlotInstruction(slot, index, { includeStylePrompt: false })).join('\n\n'),
+        '主角色卡的 firstMessage 使用标记为默认开场白的任务。若全部任务都保存为备用开场白，请根据角色当前处境另外创作一条简洁的 firstMessage。其余任务严格按顺序写入 alternateGreetings。',
     ];
 
     if (options.referenceText) lines.push('', '【用户粘贴的参考资料】', options.referenceText);
@@ -591,21 +835,25 @@ export function buildGenerationPrompt(rawOptions, references = {}) {
 export function buildGreetingSystemPrompt() {
     return [
         '你是中文互动叙事的开场白编辑器。',
-        '你的任务是根据角色卡、世界书、用户创作要求、选定风格和 U 设定，创作多条可以直接放入 SillyTavern 角色卡的 alternate greetings。',
+        '你的任务是根据角色卡、世界书和多张独立开场任务卡，创作可以直接放入 SillyTavern 角色卡的开场白。每张任务卡严格对应一条结果。',
         '',
         '【创作规则】',
         '1. 每条开场白都要让角色主动做出具体动作、说出符合语言指纹的话，并留下自然的回应空间。',
         '2. 每条开场白都要有清晰场景、当下处境和互动入口。开场之间需要在节奏、冲突强度、情绪距离和信息揭示量上形成差异。',
         '3. 角色的行为、称呼、身体微习惯和资源差异需要符合角色卡与世界书事实。',
-        '4. 每条开场白都对应一个 style 和 userSetting。U 设定只改变用户进入场景的身份、处境或与角色的既有关系，不替用户写死选择和台词。',
-        '5. 只使用用户选中的内容模块。亲密与 NSFW 内容遵循当前选项，未选内容保持在普通互动范围。',
-        '6. 使用自然流畅的中文。禁止先否定后肯定的对照句式，禁止使用任何破折号字符。',
+        '4. 每条开场白严格使用对应 slotId 的自定义要求、U 设定、开场类型、文学文风、强度和长度。任务卡中的空白自定义项由你依据角色与世界随机补全。',
+        '5. U 设定只改变用户进入场景的身份、处境或与角色的既有关系。禁止替用户决定台词、动作、情绪、想法、身体反应和选择。',
+        '6. 文风只控制叙述质地、句式节奏、意象密度、对白比例和观察方式。角色身份、行为逻辑、语言指纹、世界事实和关系阶段保持稳定。',
+        '7. 修辞依附场景中的具体事物。每个意象都服务于人物处境、气氛或剧情信息。角色对白继续遵循角色自身的语言指纹。',
+        '8. 开场结尾保留开放空间，可以是一句询问、一个等待回应的动作、一项突发变化或尚未揭开的信息。',
+        '9. 只使用用户选中的内容模块。亲密与 NSFW 内容遵循当前选项，未选内容保持在普通互动范围。',
+        '10. 使用自然流畅的中文。禁止先否定后肯定的对照句式，禁止使用任何破折号字符。',
         '',
         '【输出协议】',
         '1. 只输出 JSONL，每行一个可以被 JSON.parse 解析的对象。',
-        '2. 每行结构为 {"type":"greeting","id":"greeting.01","index":1,"style":"风格名称","userSetting":"U设定名称","text":"完整开场白"}。',
-        '3. 严格输出用户要求的数量。index 从 1 开始递增，id 依次使用 greeting.01、greeting.02 这样的稳定格式。',
-        '4. text 只放开场白正文，不要放标题、编号、解释、Markdown 代码块或额外字段。',
+        '2. 每行结构为 {"type":"greeting","id":"greeting.01","slotId":"greeting.slot.01","index":1,"style":"开场类型","literaryStyle":"文学文风","userSetting":"U设定","text":"完整开场白"}。',
+        '3. slotId 必须逐字复制任务卡中的 slotId。每张任务卡输出一次，顺序与任务卡一致。index 从 1 开始递增。',
+        '4. text 只放开场白正文。禁止添加标题、编号、解释、Markdown 代码块或额外字段。',
         '5. JSON 字符串内部的换行必须转义。每个对象保持单行。',
     ].join('\n');
 }
@@ -619,12 +867,8 @@ export function buildGreetingPrompt(rawBlueprint = {}, rawOptions = {}) {
         .map(event => '【' + (event.title || event.category || event.id) + '】' + (event.content || ''))
         .join('\n')
         .slice(0, 18000);
-    const styles = labelsFor(options.greetingStyles, GREETING_STYLE_PRESETS);
-    const userSettings = greetingUserSettingLabels(options);
-    const styleText = styles.length ? styles.join('、') : '根据角色处境自由变化';
-    const userText = userSettings.length ? userSettings.join('、') : '根据用户创作要求设计多种自然进入方式';
     return [
-        '请为以下角色卡生成 ' + options.greetingCount + ' 条可直接使用的 alternate greetings。',
+        '请为以下角色卡完成 ' + options.greetingSlots.length + ' 张独立开场任务卡。',
         '',
         '【用户创作要求】',
         options.brief || '延续角色卡和世界书的长期互动方向。',
@@ -644,13 +888,13 @@ export function buildGreetingPrompt(rawBlueprint = {}, rawOptions = {}) {
         '【世界书相关事实】',
         lore || '根据角色卡与用户要求补足场景事实。',
         '',
-        '【开场风格】',
-        styleText,
+        '【文学文风库】',
+        greetingLiteraryStyleLibrary(options),
         '',
-        '【U 设定组合】',
-        userText,
+        '【独立开场任务卡】',
+        options.greetingSlots.map((slot, index) => greetingSlotInstruction(slot, index, { includeStylePrompt: false })).join('\n\n'),
         '',
-        '每条开场白都要标明对应的 style 和 userSetting。请从给定组合中交叉取材，保持角色核心逻辑稳定，让 U 的身份或处境改变进入场景的方式。现在开始输出 JSONL。',
+        '严格按任务卡顺序输出。每张任务卡只生成一条，任何任务卡都不能合并、拆分或遗漏。现在开始输出 JSONL。',
     ].join('\n');
 }
 

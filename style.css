@@ -613,6 +613,125 @@ body.gwf-modal-open {
     line-height: 1.55;
 }
 
+.gwf-greeting-slots {
+    display: grid;
+    gap: 12px;
+}
+
+.gwf-greeting-slot {
+    padding: 12px;
+    border: 1px solid var(--gwf-line);
+    border-radius: 13px;
+    background: var(--gwf-surface-inset);
+}
+
+.gwf-greeting-slot-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 11px;
+    color: var(--gwf-heading);
+}
+
+.gwf-greeting-slot-heading > div {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+}
+
+.gwf-greeting-slot-heading code {
+    overflow: hidden;
+    color: var(--gwf-muted);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 9px;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gwf-greeting-slot-remove {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: var(--gwf-heading);
+    border: 1px solid var(--gwf-button-border);
+    border-radius: 9px;
+    background: var(--gwf-button-bg);
+    font-family: Arial, sans-serif;
+    font-size: 21px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.gwf-greeting-slot-remove:hover {
+    color: var(--gwf-danger);
+    border-color: var(--gwf-danger);
+}
+
+.gwf-greeting-slot-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+    margin: 10px 0;
+}
+
+.gwf-greeting-slot-grid label,
+.gwf-greeting-slot-area {
+    display: grid;
+    gap: 5px;
+    color: var(--gwf-muted);
+    font-size: 11px;
+    font-weight: 650;
+}
+
+.gwf-greeting-slot-wide {
+    grid-column: 1 / -1;
+}
+
+.gwf-greeting-slot-area textarea {
+    resize: vertical;
+    line-height: 1.6;
+}
+
+.gwf-greeting-default {
+    margin-top: 10px;
+}
+
+.gwf-style-prompt-preview {
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid var(--gwf-line);
+    color: var(--gwf-muted);
+    font-size: 10px;
+}
+
+.gwf-style-prompt-preview summary {
+    color: var(--gwf-accent-2);
+    cursor: pointer;
+}
+
+.gwf-style-prompt-preview pre {
+    max-height: 190px;
+    margin: 8px 0 0;
+    overflow: auto;
+    padding: 9px;
+    border-radius: 9px;
+    background: var(--gwf-surface);
+    font-family: inherit;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
+.gwf-greeting-slot-add {
+    width: 100%;
+    margin-top: 10px;
+}
+
 .gwf-subtitle,
 .gwf-module-title {
     margin-bottom: 7px;
@@ -715,6 +834,52 @@ body.gwf-modal-open {
     color: var(--gwf-muted);
     font-size: 11px;
     line-height: 1.55;
+}
+
+.gwf-activation-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 9px;
+}
+
+.gwf-activation-legend span {
+    padding: 5px 8px;
+    color: var(--gwf-muted);
+    border: 1px solid var(--gwf-line);
+    border-radius: 999px;
+    background: var(--gwf-surface-inset);
+    font-size: 10px;
+}
+
+.gwf-activation-legend span:first-child b {
+    color: #77cfff;
+}
+
+.gwf-activation-legend span:last-child b {
+    color: #77dca7;
+}
+
+.gwf-activation-guide {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 11px;
+    color: var(--gwf-muted);
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+.gwf-activation-guide span {
+    padding-left: 8px;
+    border-left: 2px solid var(--gwf-line);
+}
+
+.gwf-activation-guide b {
+    color: var(--gwf-heading);
+}
+
+.gwf-activation-guide .is-recommended {
+    border-left-color: var(--gwf-accent);
 }
 
 .gwf-nested-details {
@@ -1262,6 +1427,8 @@ body.gwf-modal-open {
     .gwf-compose { padding: 10px; }
     .gwf-section { padding: 11px; }
     .gwf-check-grid, .gwf-count-row, .gwf-custom-grid, .gwf-section-lengths { grid-template-columns: 1fr; }
+    .gwf-greeting-slot-grid { grid-template-columns: 1fr; }
+    .gwf-greeting-slot-wide { grid-column: auto; }
     .gwf-blueprint-view { grid-template-columns: 98px minmax(0, 1fr); }
     .gwf-tabs { width: 100%; overflow-x: auto; }
     .gwf-validation { max-width: 100%; }
