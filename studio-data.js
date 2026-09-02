@@ -1,7 +1,7 @@
 export const EXTENSION_NAME = 'gaga-world-forge';
 export const DISPLAY_NAME = '嘎嘎世界与角色工坊';
 export const SETTINGS_KEY = 'gagaWorldForge';
-export const VERSION = '0.2.4';
+export const VERSION = '0.2.5';
 
 export const THEME_OPTIONS = [
     { id: 'twilight', label: '暮色紫粉', shortLabel: '紫粉' },
@@ -760,6 +760,7 @@ export function buildSystemPrompt() {
 【世界书设计】
 1. 每个 world、npc、relation、lore 事件代表一个实际世界书条目。正文脱离标题后仍应自包含完整语义。
 2. 路人NPC用单条紧凑档案。次要NPC用单条完整档案。重要NPC按复杂度拆成二至四条，aspect 使用 base、logic、secret、reaction，并用同一个 entityId 归组。
+   每个 npc 事件必须填写 tier。路人只写 passerby，次要只写 minor，重要只写 important。禁止填写中文值、其他英文近义词或空值。
 3. NPC的 base 条目需要简短写清身份、活动范围、当前诉求、自然出场条件和默认态度，使模型能够主动引入人物。logic、secret、reaction 条目承载按场景加载的详细资料。
 4. 每个世界书事件标注稳定ID、类别、别名、触发关键词、重要程度、持续属性、依赖条目。关键词优先使用具体人名、地名、事件名和动作词，避免宽泛情绪词与泛化评价词。
 5. 状态条目单独拆分，persistence 使用消息数量。sticky 表示触发后的持续消息数，cooldown 表示结束后的冷却消息数，delay 表示聊天达到多少条消息后才可触发。
@@ -790,6 +791,7 @@ export function buildSystemPrompt() {
 5. 仅在用户选择 User 人设时输出 role 为 user 的 character 事件。主角色卡使用 role 为 main。额外可玩角色使用 role 为 playable。
 6. world、npc、relation、lore 必须使用给定公共字段。category 只能从允许类别中选择。
 7. importance 只使用 critical、high、medium、low。selectiveLogic 只使用 AND_ANY、AND_ALL、NOT_ANY、NOT_ALL。
+   npc.tier 只使用 passerby、minor、important。npc.aspect 只使用 base、logic、secret、reaction。
 8. done 必须是最后一行，并填写实际事件数量。done 之前不得提前结束。
 9. 不输出 Markdown 代码块、解释、前言、标题或结语。
 

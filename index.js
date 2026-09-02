@@ -38,6 +38,7 @@ import {
     findLengthIssues,
     findStyleIssues,
     mergeContinuationEvents,
+    normalizeBlueprintEvents,
     parsePatchJsonl,
     validateBlueprint,
 } from './jsonl.js';
@@ -421,10 +422,11 @@ function createOverlay() {
     fillForm(settings().options);
     const draft = settings().draftEvents;
     if (Array.isArray(draft) && draft.length) {
-        state.events = draft;
-        state.complete = validateBlueprint(draft).valid;
+        state.events = normalizeBlueprintEvents(draft);
+        state.complete = validateBlueprint(state.events).valid;
         state.canContinue = !state.complete;
-        state.selectedId = draft[0]?.id || '';
+        state.selectedId = state.events[0]?.id || '';
+        persistDraft();
         refreshResults();
         setStatus('已恢复上次草稿');
     }
@@ -1088,7 +1090,7 @@ function applyProjectCompileSettings(events, options) {
 }
 
 async function finalizeProjectEvents(options, plan) {
-    state.events = filterUnselectedEvents(state.events, options);
+    state.events = normalizeBlueprintEvents(filterUnselectedEvents(state.events, options));
     let baseValidation = validateBlueprint(state.events);
     if (!baseValidation.valid) {
         const repaired = await repairInvalidBlueprint(state.events, baseValidation.errors);
@@ -1102,7 +1104,8 @@ async function finalizeProjectEvents(options, plan) {
     if (issues.length) {
         state.events = await repairContentIssues(state.events, issues);
         issues = [...findStyleIssues(state.events), ...findLengthIssues(state.events, plan)];
-        if (issues.length) throw new Error(`自动修复后仍有 ${issues.length} 个文风或长度问题，请在编辑区手动调整`);
+        const blockingIssues = issues.filter(issue => issue.severity !== 'advisory');
+        if (blockingIssues.length) throw new Error(`自动修复后仍有 ${blockingIssues.length} 个阻塞问题，请在编辑区手动调整`);
     }
 
     state.complete = true;
@@ -1456,8 +1459,11 @@ function eventLabel(event) {
     return event.title || event.id;
 }
 
-function eventHasIssue(id) {
-    return [...state.styleIssues, ...state.lengthIssues].some(issue => issue.id === id);
+function eventHasIssue(id, severity = 'blocking') {
+    return [...state.styleIssues, ...state.lengthIssues].some(issue => {
+        if (issue.id !== id) return false;
+        return severity === 'advisory' ? issue.severity === 'advisory' : issue.severity !== 'advisory';
+    });
 }
 
 function refreshResults({ preserveEditor = false } = {}) {
@@ -1473,19 +1479,25 @@ function refreshResults({ preserveEditor = false } = {}) {
     state.validation = validateBlueprint(state.events, { requireDone: state.complete });
     state.styleIssues = findStyleIssues(state.events);
     state.lengthIssues = findLengthIssues(state.events, resolveLengthPlan(collectOptionsWithoutSaving()));
-    const issueCount = state.styleIssues.length + state.lengthIssues.length;
+    const issues = [...state.styleIssues, ...state.lengthIssues];
+    const blockingIssueCount = issues.filter(issue => issue.severity !== 'advisory').length;
+    const advisoryCount = issues.length - blockingIssueCount;
     const validation = state.overlay.querySelector('#gwf-validation');
-    const ready = state.complete && state.validation.valid && issueCount === 0;
-    validation.className = `gwf-validation ${ready ? 'is-valid' : state.generating ? 'is-working' : 'is-invalid'}`;
+    const ready = state.complete && state.validation.valid && blockingIssueCount === 0;
+    validation.className = `gwf-validation ${ready ? 'is-valid' : state.generating || state.canContinue ? 'is-working' : 'is-invalid'}`;
     validation.textContent = ready
-        ? `可写入酒馆 · ${state.events.length} 个事件`
+        ? advisoryCount
+            ? `可写入酒馆 · ${advisoryCount} 条优化建议`
+            : `可写入酒馆 · ${state.events.length} 个事件`
         : state.generating
             ? `生成中 · ${state.events.length} 个事件`
-            : `${state.validation.errors.length + issueCount} 个待处理问题`;
+            : state.canContinue
+                ? `草稿已保留 · 可继续生成`
+                : `${state.validation.errors.length + blockingIssueCount} 个待处理问题`;
 
     const list = state.overlay.querySelector('#gwf-event-list');
     list.innerHTML = state.events.map(event => `
-        <button type="button" class="gwf-event-item ${event.id === state.selectedId ? 'is-active' : ''} ${eventHasIssue(event.id) ? 'has-issue' : ''}" data-event-id="${escapeHtml(event.id)}">
+        <button type="button" class="gwf-event-item ${event.id === state.selectedId ? 'is-active' : ''} ${eventHasIssue(event.id) ? 'has-issue' : ''} ${eventHasIssue(event.id, 'advisory') ? 'has-advisory' : ''}" data-event-id="${escapeHtml(event.id)}">
             <span class="gwf-event-type">${escapeHtml(event.type)}</span>
             <span class="gwf-event-name">${escapeHtml(eventLabel(event))}</span>
         </button>`).join('');
@@ -1582,7 +1594,10 @@ function renderEditor() {
             + field('依赖条目，用逗号分隔', 'dependencies', (event.dependencies || []).join(', '), { kind: 'array' });
     }
     const eventIssues = [...state.styleIssues, ...state.lengthIssues].filter(issue => issue.id === event.id);
-    if (eventIssues.length) html += `<div class="gwf-editor-issues">${eventIssues.map(issue => `<p>${escapeHtml(issue.path)}：${escapeHtml(issue.reason)}</p>`).join('')}</div>`;
+    const blockingIssues = eventIssues.filter(issue => issue.severity !== 'advisory');
+    const advisoryIssues = eventIssues.filter(issue => issue.severity === 'advisory');
+    if (blockingIssues.length) html += `<div class="gwf-editor-issues">${blockingIssues.map(issue => `<p>${escapeHtml(issue.path)}：${escapeHtml(issue.reason)}</p>`).join('')}</div>`;
+    if (advisoryIssues.length) html += `<div class="gwf-editor-issues is-advisory"><strong>可选优化建议</strong>${advisoryIssues.map(issue => `<p>${escapeHtml(issue.path)}：${escapeHtml(issue.reason)}</p>`).join('')}</div>`;
     editor.innerHTML = html;
     editor.querySelectorAll('[data-field]').forEach(control => control.addEventListener('input', () => {
         updateEventField(event, control.dataset.field, control.value, control.dataset.kind || 'string');

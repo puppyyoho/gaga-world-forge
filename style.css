@@ -1134,6 +1134,10 @@ body.gwf-modal-open {
     box-shadow: inset 3px 0 var(--gwf-danger);
 }
 
+.gwf-event-item.has-advisory:not(.has-issue) {
+    box-shadow: inset 3px 0 var(--gwf-warning);
+}
+
 .gwf-event-type {
     color: var(--gwf-accent-2);
     font-size: 9px;
@@ -1298,6 +1302,18 @@ body.gwf-modal-open {
 
 .gwf-editor-issues p {
     margin: 3px 0;
+}
+
+.gwf-editor-issues.is-advisory {
+    color: var(--gwf-warning);
+    border-color: color-mix(in srgb, var(--gwf-warning) 30%, transparent);
+    background: color-mix(in srgb, var(--gwf-warning) 8%, transparent);
+}
+
+.gwf-editor-issues.is-advisory strong {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--gwf-heading);
 }
 
 .gwf-json-preview,

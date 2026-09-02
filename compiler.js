@@ -1,4 +1,4 @@
-import { aggregateBlueprint, validateBlueprint } from './jsonl.js';
+import { aggregateBlueprint, normalizeBlueprintEvents, validateBlueprint } from './jsonl.js';
 
 const IMPORTANCE_ORDER = {
     critical: 9000,
@@ -169,8 +169,9 @@ function activationSettings(event, randomGroup, dependencyKeys, strategy) {
 }
 
 export function compileWorldBook(eventsOrBlueprint, bookName = '', compileOptions = {}) {
-    const blueprint = Array.isArray(eventsOrBlueprint) ? aggregateBlueprint(eventsOrBlueprint) : eventsOrBlueprint;
-    const validation = validateBlueprint(blueprint.events || [], { requireDone: false });
+    const sourceEvents = Array.isArray(eventsOrBlueprint) ? eventsOrBlueprint : eventsOrBlueprint?.events || [];
+    const blueprint = aggregateBlueprint(normalizeBlueprintEvents(sourceEvents));
+    const validation = validateBlueprint(blueprint.events, { requireDone: false });
     if (!validation.valid) throw new Error(`蓝图无法编译：${validation.errors.join('；')}`);
 
     const entries = {};

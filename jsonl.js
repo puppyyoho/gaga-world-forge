@@ -6,6 +6,22 @@ const IMPORTANCE = new Set(['critical', 'high', 'medium', 'low']);
 const ACTIVATION_MODES = new Set(['constant', 'keyword', 'selective', 'probability', 'state']);
 const SELECTIVE_LOGIC = new Set(['AND_ANY', 'AND_ALL', 'NOT_ANY', 'NOT_ALL']);
 const CHARACTER_ROLES = new Set(['main', 'playable', 'user']);
+const NPC_TIERS = new Set(['passerby', 'minor', 'important']);
+const NPC_ASPECTS = new Set(['base', 'logic', 'secret', 'reaction']);
+const NPC_TIER_ALIASES = new Map([
+    ['important', 'important'], ['major', 'important'], ['main', 'important'], ['core', 'important'], ['key', 'important'],
+    ['重要', 'important'], ['主要', 'important'], ['核心', 'important'], ['关键', 'important'], ['重点', 'important'], ['重要npc', 'important'],
+    ['minor', 'minor'], ['secondary', 'minor'], ['supporting', 'minor'], ['side', 'minor'], ['normal', 'minor'],
+    ['次要', 'minor'], ['配角', 'minor'], ['普通', 'minor'], ['支线', 'minor'], ['次要npc', 'minor'],
+    ['passerby', 'passerby'], ['background', 'passerby'], ['extra', 'passerby'], ['cameo', 'passerby'],
+    ['路人', 'passerby'], ['背景', 'passerby'], ['群众', 'passerby'], ['过场', 'passerby'], ['路人npc', 'passerby'],
+]);
+const NPC_ASPECT_ALIASES = new Map([
+    ['base', 'base'], ['profile', 'base'], ['basic', 'base'], ['基础', 'base'], ['档案', 'base'], ['基础印象', 'base'],
+    ['logic', 'logic'], ['behavior', 'logic'], ['behaviour', 'logic'], ['逻辑', 'logic'], ['行为', 'logic'], ['行事逻辑', 'logic'],
+    ['secret', 'secret'], ['history', 'secret'], ['秘密', 'secret'], ['隐秘', 'secret'], ['过往', 'secret'], ['隐秘过往', 'secret'],
+    ['reaction', 'reaction'], ['response', 'reaction'], ['反应', 'reaction'], ['条件反应', 'reaction'],
+]);
 const DASH_RE = /[—–―⸺]/u;
 const CONTRAST_PATTERNS = [
     /不是[^。！？\n]{0,80}而是/u,
@@ -29,6 +45,35 @@ function asArray(value) {
 
 function hasString(value) {
     return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeEnumAlias(value, aliases) {
+    return aliases.get(String(value ?? '').trim().toLocaleLowerCase()) || '';
+}
+
+function inferNpcAspect(event) {
+    const suffix = String(event?.id || '').split('.').at(-1);
+    return NPC_ASPECTS.has(suffix) ? suffix : 'base';
+}
+
+function inferNpcTier(event, aspect) {
+    if (aspect !== 'base') return 'important';
+    if (['critical', 'high'].includes(event?.importance)) return 'important';
+    if (event?.importance === 'low') return 'passerby';
+    return 'minor';
+}
+
+export function normalizeBlueprintEvent(event) {
+    if (!isObject(event) || event.type !== 'npc') return event;
+    const normalized = { ...event };
+    const aspect = normalizeEnumAlias(event.aspect, NPC_ASPECT_ALIASES) || inferNpcAspect(event);
+    normalized.aspect = aspect;
+    normalized.tier = normalizeEnumAlias(event.tier, NPC_TIER_ALIASES) || inferNpcTier(event, aspect);
+    return normalized;
+}
+
+export function normalizeBlueprintEvents(events) {
+    return asArray(events).map(normalizeBlueprintEvent);
 }
 
 function validateStringArray(value, label, errors, { allowEmpty = true } = {}) {
@@ -75,8 +120,8 @@ function validateLoreEvent(event, errors) {
     }
     if (event.type === 'npc') {
         if (!hasString(event.entityId)) errors.push(`${event.id}.entityId 不能为空`);
-        if (!['passerby', 'minor', 'important'].includes(event.tier)) errors.push(`${event.id}.tier 无效`);
-        if (!['base', 'logic', 'secret', 'reaction'].includes(event.aspect)) errors.push(`${event.id}.aspect 无效`);
+        if (!NPC_TIERS.has(event.tier)) errors.push(`${event.id}.tier 无效`);
+        if (!NPC_ASPECTS.has(event.aspect)) errors.push(`${event.id}.aspect 无效`);
     }
     if (event.type === 'relation') validateStringArray(event.participants, `${event.id}.participants`, errors, { allowEmpty: false });
 }
@@ -156,7 +201,7 @@ function extractJsonObjects(raw) {
         try {
             const event = JSON.parse(text);
             if (!isObject(event)) throw new Error('事件必须是 JSON 对象');
-            events.push(event);
+            events.push(normalizeBlueprintEvent(event));
         } catch (error) {
             errors.push({ lineNumber: startLine, line: text, message: String(error?.message || error) });
         }
@@ -220,8 +265,9 @@ export class JsonlStreamParser {
             try {
                 const event = JSON.parse(line);
                 if (!isObject(event)) throw new Error('事件必须是 JSON 对象');
-                this.events.push(event);
-                this.onEvent?.(event, this.lineNumber);
+                const normalized = normalizeBlueprintEvent(event);
+                this.events.push(normalized);
+                this.onEvent?.(normalized, this.lineNumber);
             } catch (error) {
                 const detail = { lineNumber: this.lineNumber, line, message: String(error?.message || error) };
                 this.errors.push(detail);
@@ -236,8 +282,9 @@ export class JsonlStreamParser {
                 try {
                     const event = JSON.parse(line);
                     if (!isObject(event)) throw new Error('事件必须是 JSON 对象');
-                    this.events.push(event);
-                    this.onEvent?.(event, this.lineNumber);
+                    const normalized = normalizeBlueprintEvent(event);
+                    this.events.push(normalized);
+                    this.onEvent?.(normalized, this.lineNumber);
                 } catch (error) {
                     const detail = { lineNumber: this.lineNumber, line, message: String(error?.message || error) };
                     this.errors.push(detail);
@@ -311,6 +358,7 @@ export function findLengthIssues(events, plan) {
                 issues.push({
                     id: event.id,
                     path: key,
+                    severity: 'advisory',
                     reason: `角色卡正文合计约 ${total} 字，明显低于 ${min} 字目标。请将本字段扩写至约 ${target} 字，${focus}`,
                 });
             }

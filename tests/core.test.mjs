@@ -16,6 +16,7 @@ import {
     findStyleIssues,
     mergeContinuationEvents,
     findLengthIssues,
+    normalizeBlueprintEvents,
     parsePatchJsonl,
     validateBlueprint,
 } from '../jsonl.js';
@@ -126,6 +127,66 @@ function sampleEvents() {
         },
     ];
 }
+
+test('normalizes NPC tier aliases and infers missing controlled fields', () => {
+    const normalized = normalizeBlueprintEvents([
+        { type: 'npc', id: 'npc.a.base', tier: '重要', aspect: '基础', importance: 'high' },
+        { type: 'npc', id: 'npc.b.base', tier: 'secondary', aspect: 'profile', importance: 'medium' },
+        { type: 'npc', id: 'npc.c.reaction', tier: '', aspect: '', importance: 'medium' },
+        { type: 'npc', id: 'npc.d.base', tier: '未知层级', aspect: '未知分面', importance: 'low' },
+    ]);
+    assert.deepEqual(normalized.map(event => [event.tier, event.aspect]), [
+        ['important', 'base'],
+        ['minor', 'base'],
+        ['important', 'reaction'],
+        ['passerby', 'base'],
+    ]);
+});
+
+test('stream parser normalizes NPC tier before validation', () => {
+    const parser = new JsonlStreamParser();
+    parser.pushCumulative('{"type":"npc","id":"npc.a.base","tier":"次要","aspect":"基础","importance":"medium"}\n');
+    const parsed = parser.finish();
+    assert.equal(parsed.events[0].tier, 'minor');
+    assert.equal(parsed.events[0].aspect, 'base');
+});
+
+test('world-book compiler accepts legacy NPC tier aliases', () => {
+    const events = sampleEvents();
+    const npc = events.find(event => event.type === 'npc');
+    npc.tier = '次要';
+    npc.aspect = '基础';
+    const book = compileWorldBook(events);
+    const compiledNpc = Object.values(book.entries).find(entry => entry.extensions?.gagaWorldForge?.sourceId === npc.id);
+    assert.ok(compiledNpc);
+});
+
+test('two invalid NPC tiers recover to downloadable world and character outputs', () => {
+    const events = sampleEvents();
+    const firstNpc = events.find(event => event.type === 'npc');
+    firstNpc.id = 'npc.chenhuaiyuan.base';
+    firstNpc.entityId = 'npc.chenhuaiyuan';
+    firstNpc.tier = '重要人物';
+    firstNpc.aspect = '基础档案';
+    firstNpc.importance = 'high';
+    const secondNpc = structuredClone(firstNpc);
+    secondNpc.id = 'npc.zhongqing.base';
+    secondNpc.entityId = 'npc.zhongqing';
+    secondNpc.tier = null;
+    secondNpc.aspect = null;
+    secondNpc.importance = 'medium';
+    events.splice(events.findIndex(event => event.type === 'relation'), 0, secondNpc);
+
+    const normalized = normalizeBlueprintEvents(events);
+    const validation = validateBlueprint(normalized);
+    const book = compileWorldBook(normalized);
+    const card = compileCharacterCard(normalized);
+
+    assert.equal(validation.valid, true);
+    assert.equal(Object.keys(book.entries).length, 5);
+    assert.equal(card.spec, 'chara_card_v2');
+    assert.equal(Object.keys(card.data.character_book.entries).length, 5);
+});
 
 test('JSONL parser accepts cumulative chunks split inside an object', () => {
     const source = sampleEvents().map(event => JSON.stringify(event)).join('\n');
@@ -507,4 +568,5 @@ test('length scanner requests deeper character fields when the card is too thin'
     assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'personality'), true);
     assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'scenario'), true);
     assert.equal(issues.some(issue => issue.id === 'character.main' && issue.path === 'exampleDialogue'), true);
+    assert.equal(issues.every(issue => issue.severity === 'advisory'), true);
 });
